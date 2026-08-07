@@ -1,0 +1,12 @@
+{
+  "name": "codegen-consume-host",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "tx3-sdk": "^0.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "typescript": "^5.8.3"
+  }
+}

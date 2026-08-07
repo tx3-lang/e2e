@@ -18,6 +18,13 @@ on:
       - 'lib/**'
       - '.github/workflows/dx-e2e-stable.yml'
       - '.github/actions/dx-e2e-run/**'
+  pull_request:
+    paths:
+      - 'run.sh'
+      - 'journeys/**'
+      - 'lib/**'
+      - '.github/workflows/dx-e2e-stable.yml'
+      - '.github/actions/dx-e2e-run/**'
   workflow_dispatch:
   schedule:
     - cron: '0 7 * * *'          # nightly drift check
@@ -50,7 +57,7 @@ jobs:
       max-parallel: 3
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
-        journey: [01-basic-init, 02-lang-tour, 03-lang-edge, 05-invoke, 06-hydra]
+        journey: [01-basic-init, 02-lang-tour, 03-lang-edge, 04-devnet-roundtrip, 05-invoke, 06-hydra, 07-codegen-consume, 08-interface-consume, 09-protocol-fixture]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/dx-e2e-run

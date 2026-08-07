@@ -1,0 +1,8 @@
+[protocol]
+scope = "acme"
+name = "widget"
+version = "0.1.0"
+main = "main.tx3"
+
+[ledger]
+family = "cardano"
