@@ -17,6 +17,13 @@ on:
       - 'lib/**'
       - '.github/workflows/dx-e2e-beta.yml'
       - '.github/actions/dx-e2e-run/**'
+  pull_request:
+    paths:
+      - 'run.sh'
+      - 'journeys/**'
+      - 'lib/**'
+      - '.github/workflows/dx-e2e-beta.yml'
+      - '.github/actions/dx-e2e-run/**'
   workflow_dispatch:
 
 permissions:
@@ -47,7 +54,7 @@ jobs:
       max-parallel: 3
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
-        journey: [02-lang-tour, 03-lang-edge, 04-devnet-roundtrip, 05-invoke]
+        journey: [02-lang-tour, 03-lang-edge, 04-devnet-roundtrip, 05-invoke, 07-codegen-consume, 08-interface-consume]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/dx-e2e-run

@@ -1,0 +1,32 @@
+name: DX E2E (live)
+
+# The secrets-gated live-network journey (10-live-network): resolve against a
+# real preprod TRP endpoint. Never on push — the offline gate must stay
+# secret-free. Until the TRP_*/TEST_PARTY_* secrets are configured on this
+# repo, the journey skips green and the scheduled run is a no-op (see the
+# journey's README).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1'         # weekly live-drift check
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live (ubuntu-latest · 10-live-network)
+    runs-on: ubuntu-latest
+    env:
+      TRP_ENDPOINT_PREPROD: ${{ secrets.TRP_ENDPOINT_PREPROD }}
+      TRP_API_KEY_PREPROD: ${{ secrets.TRP_API_KEY_PREPROD }}
+      TEST_PARTY_A_ADDRESS: ${{ secrets.TEST_PARTY_A_ADDRESS }}
+      TEST_PARTY_B_ADDRESS: ${{ secrets.TEST_PARTY_B_ADDRESS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/dx-e2e-run
+        with:
+          channel: stable
+          journey: 10-live-network
+          github-token: ${{ secrets.GITHUB_TOKEN }}

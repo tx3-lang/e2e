@@ -1,0 +1,22 @@
+party Owner;
+
+party Buyer;
+
+tx widget_transfer(
+    quantity: Int
+) {
+    input source {
+        from: Owner,
+        min_amount: Ada(quantity) + fees,
+    }
+
+    output {
+        to: Buyer,
+        amount: Ada(quantity),
+    }
+
+    output {
+        to: Owner,
+        amount: source - Ada(quantity) - fees,
+    }
+}
