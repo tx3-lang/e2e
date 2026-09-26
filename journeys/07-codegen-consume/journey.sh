@@ -3,7 +3,7 @@
 # Journey 07 — codegen consume. See README.md for what this covers.
 # Run via e2e/run.sh, which provides $TRIX and an isolated working directory.
 #
-#@ min-tx3c: 0.23.0
+#@ min-tx3c: 0.24.0
 
 source "${E2E_LIB:?E2E_LIB not set — run this journey via e2e/run.sh}"
 
@@ -24,11 +24,15 @@ fi
 mkdir demo && cd demo
 run_cmd "trix init -y — scaffold a new project" "${TRIX}" init -y
 
-# 2. Generate the ts client: real `tx3c codegen` against the published
-# codegen-v1beta0 templates (downloaded from tx3-lang/web-sdk).
+# 2. Generate the ts client: real `tx3c codegen` rendering the built-in
+# `ts-client` template that ships inside tx3c (trix passes the plugin name
+# through as `--template ts-client`; nothing is downloaded).
 run_cmd "trix codegen --plugin ts-client — generate bindings" "${TRIX}" codegen --plugin ts-client
 assert_output_contains "Added [[codegen]]" "plugin entry seeded into trix.toml"
 assert_output_contains "Bindgen successful for 'demo'"
+grep -qiF "Reading template from" "${LAST_OUTPUT_FILE}" \
+  && die "built-in plugin downloaded templates instead of using tx3c's built-in template"
+ok "built-in template rendered by tx3c, no template download"
 assert_exists ".tx3/codegen/ts-client/demo/protocol.ts" "per-protocol layout: .tx3/codegen/ts-client/demo/"
 [[ -e ".tx3/codegen/ts-client/protocol.ts" ]] && die "bindings leaked outside the per-protocol subdir"
 ok "no flat protocol.ts outside the per-protocol subdir"
@@ -38,7 +42,7 @@ assert_output_contains 'PROTOCOL_NAME = "demo"' "protocol identity embedded"
 assert_output_contains "TRANSFER_TIR" "transfer TIR envelope embedded"
 assert_output_contains "class Client" "typed client wrapper emitted"
 
-# 3. Compile it in a host package. The templates emit a bare module — the
+# 3. Compile it in a host package. The template emits a bare module — the
 # consuming application provides package.json/tsconfig, exactly what the
 # fixture models. npm install talks to the public npm registry (no secrets).
 mkdir app
