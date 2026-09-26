@@ -11,8 +11,9 @@ gate, alias → cached-TII routing) runs against a fake `tx3c` and a canned TII 
 this journey validates is the *real* half: `tx3c decode` of a genuinely published-shaped TII, and
 real codegen from a cached interface artifact — the interface is consumed, never recompiled.
 
-- **Scope:** compile/lower (no devnet). Offline except the codegen templates download (GitHub,
-  anonymous). No secrets, no registry infrastructure.
+- **Scope:** compile/lower (no devnet). Fully offline with tx3c 0.24.0 and trix 0.27.0 or later,
+  where the codegen template ships inside tx3c; older toolchains download it from GitHub
+  (anonymous). No secrets, no registry infrastructure.
 - **Toolchain gate:** `#@ min-tx3c: 0.23.0` (matches the verified toolchain).
 - **Fixtures:** `trix.toml` + `main.tx3` — the publisher protocol (`acme/widget:0.1.0`, one
   `widget_transfer` tx with distinctive party names to assert on).
