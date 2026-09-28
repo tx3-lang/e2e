@@ -90,11 +90,14 @@ ALICE="addr_test1vq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7ss9hjl0y"
 BOB="$("${TRIX}" identities bob address-testnet 2>/dev/null | grep '^addr' | head -n1)"
 [[ -n "${ALICE}" && -n "${BOB}" ]] || die "could not resolve alice/bob testnet addresses"
 
+DEVNET_HOME="${PWD}/.tx3/dolos"
+cleanup_devnet() {
+  # Match this journey's unique configuration path, including on startup failure.
+  pkill -f "dolos.*${DEVNET_HOME}/dolos[.]toml daemon" >/dev/null 2>&1 || true
+}
+trap cleanup_devnet EXIT
 run_cmd "trix devnet --background — start a local devnet" "${TRIX}" devnet --background
 assert_output_contains "devnet started in background"
-DEVNET_PIDS="$(pgrep -f 'dolos.*daemon' | tr '\n' ' ')"
-# shellcheck disable=SC2064
-trap "[[ -n \"${DEVNET_PIDS}\" ]] && kill -9 ${DEVNET_PIDS} 2>/dev/null" EXIT
 for _ in $(seq 1 30); do
   (exec 3<>/dev/tcp/127.0.0.1/8164) 2>/dev/null && { exec 3>&- 3<&-; break; }
   sleep 1

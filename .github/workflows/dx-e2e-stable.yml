@@ -85,3 +85,13 @@ jobs:
           channel: stable
           journey: 12-java-sdk
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require Java toolchain floors (no skipped coverage)
+        shell: bash
+        run: |
+          source lib/common.sh
+          channel_bin="${HOME}/.tx3/stable/bin"
+          tx3c_version="$("${channel_bin}/tx3c" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          trix_version="$("${channel_bin}/trix" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+          [[ -n "${tx3c_version}" && -n "${trix_version}" ]] || die "could not read Java toolchain versions"
+          version_ge "${tx3c_version}" 0.25.0 || die "Java CI requires tx3c >= 0.25.0"
+          version_ge "${trix_version}" 0.28.0 || die "Java CI requires trix >= 0.28.0"
