@@ -1,0 +1,5 @@
+# Canonical SDK CIP-1852 signer vector, funded only in this disposable devnet.
+# Source: sdk-spec/test-vectors/crypto/signer-vectors.json (cardanoCip1852).
+[[utxos]]
+address = "addr_test1vq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7ss9hjl0y"
+value = 100000000000

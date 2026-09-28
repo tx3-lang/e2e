@@ -11,6 +11,10 @@ JOURNEY_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 journey_begin "11-swift-sdk" "generate a Swift client → compile a clean consumer → sign, submit, and confirm on devnet"
 
+TRIX_VERSION="$("${TRIX}" --version | sed -n 's/^trix //p')"
+version_ge "${TRIX_VERSION}" "0.28.0" \
+  || die "journey 11 requires trix >= 0.28.0 with the built-in swift-client plugin"
+
 command -v swift >/dev/null 2>&1 \
   || die "swift not found — journey 11 requires the approved macOS/Xcode runner"
 command -v git >/dev/null 2>&1 || die "git not found — SwiftPM package resolution requires git"
@@ -69,19 +73,23 @@ run_cmd "swift build --configuration debug — compile generated client and cons
   swift build --package-path app --configuration debug
 assert_exists "app/.build/debug/SwiftSDKJourney" "host consumer compiled"
 
-# 3. Exercise the complete SDK lifecycle with trix's deterministic devnet
-# identities. This mnemonic is trix's deterministic `alice` test identity; it
-# is devnet-only fixture data, never a live credential.
-ALICE="$("${TRIX}" identities alice address-testnet 2>/dev/null | grep '^addr' | head -n1)"
+# 3. Fund the canonical CIP-1852 signer vector in this disposable devnet.
+# trix's alice uses an underived Icarus root key, so it cannot be bound to
+# CardanoSigner. These public SDK vector credentials are devnet-only fixtures.
+cp "${JOURNEY_HOME}/devnet.toml" devnet.toml
+ALICE="addr_test1vq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7ss9hjl0y"
 BOB="$("${TRIX}" identities bob address-testnet 2>/dev/null | grep '^addr' | head -n1)"
-[[ -n "${ALICE}" && -n "${BOB}" ]] || die "could not resolve alice/bob testnet addresses"
-ALICE_MNEMONIC="crash basket asthma gather great orient talk ship gown light blue small bid obvious office grid creek mushroom book second inflict boost lumber call"
+[[ -n "${BOB}" ]] || die "could not resolve bob's testnet address"
+ALICE_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
+DEVNET_HOME="${PWD}/.tx3/dolos"
+cleanup_devnet() {
+  # Install before startup and match only this journey's unique config path.
+  pkill -f "dolos.*${DEVNET_HOME}/dolos[.]toml daemon" >/dev/null 2>&1 || true
+}
+trap cleanup_devnet EXIT
 run_cmd "trix devnet --background — start a local devnet" "${TRIX}" devnet --background
 assert_output_contains "devnet started in background"
-DEVNET_PIDS="$(pgrep -f 'dolos.*daemon' | tr '\n' ' ')"
-# shellcheck disable=SC2064
-trap "[[ -n \"${DEVNET_PIDS}\" ]] && kill -9 ${DEVNET_PIDS} 2>/dev/null" EXIT
 for _ in $(seq 1 30); do
   (exec 3<>/dev/tcp/127.0.0.1/8164) 2>/dev/null && { exec 3>&- 3<&-; break; }
   sleep 1
