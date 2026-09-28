@@ -63,6 +63,21 @@ jobs:
           journey: ${{ matrix.journey }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  swift-sdk:
+    name: beta (macos-15 · 11-swift-sdk)
+    needs: warmup
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+      - uses: ./.github/actions/dx-e2e-run
+        with:
+          channel: beta
+          journey: 11-swift-sdk
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
   java-sdk:
     name: beta (ubuntu-24.04 · 12-java-sdk)
     needs: warmup
