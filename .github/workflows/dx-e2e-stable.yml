@@ -65,3 +65,23 @@ jobs:
           channel: stable
           journey: ${{ matrix.journey }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  java-sdk:
+    name: stable (ubuntu-24.04 · 12-java-sdk)
+    needs: warmup
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Require Maven 3.9
+        shell: bash
+        run: mvn -version | head -n1 | grep -Eq '^Apache Maven 3[.]9[.]'
+      - uses: ./.github/actions/dx-e2e-run
+        with:
+          channel: stable
+          journey: 12-java-sdk
+          github-token: ${{ secrets.GITHUB_TOKEN }}

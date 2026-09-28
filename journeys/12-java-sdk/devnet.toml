@@ -1,0 +1,4 @@
+# Checksum-verified Java SDK signer vector, funded only inside this disposable devnet.
+[[utxos]]
+address = "addr_test1vq8ac7qqy0vtulyl7wntmsxc6wex80gvcyjy33qffrhm7ss9hjl0y"
+value = 100000000000
