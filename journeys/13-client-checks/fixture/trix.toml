@@ -1,0 +1,8 @@
+[protocol]
+scope = "e2e"
+name = "client-check"
+version = "0.1.0"
+main = "main.tx3"
+
+[ledger]
+family = "cardano"

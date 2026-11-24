@@ -1,0 +1,49 @@
+party Sender;
+
+party Receiver;
+
+tx place_order(
+    quantity: Int,
+    datum_tag: Bytes,
+    refund_to: Address,
+    anchor: UtxoRef,
+    urgent: Bool,
+) {
+    input source {
+        from: Sender,
+        min_amount: Ada(quantity) + fees,
+    }
+
+    output {
+        to: Receiver,
+        amount: Ada(quantity),
+        datum: datum_tag,
+    }
+
+    output {
+        to: Sender,
+        amount: source - Ada(quantity) - fees,
+    }
+}
+
+tx settle(
+    quantity: Int,
+    refund: Address,
+    anchor: UtxoRef,
+    urgent: Bool,
+) {
+    input source {
+        from: Sender,
+        min_amount: Ada(quantity) + fees,
+    }
+
+    output {
+        to: Receiver,
+        amount: Ada(quantity),
+    }
+
+    output {
+        to: Sender,
+        amount: source - Ada(quantity) - fees,
+    }
+}
