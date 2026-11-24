@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-20T11:00:00Z",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "swap",
+    "network": "preprod",
+    "operation": "place_order",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "clients",
+  "languages": [
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "rust",
+      "package": "crates.io/crates/tx3-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/rust",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    },
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "typescript",
+      "package": "npmjs.com/package/tx3-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/typescript",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    },
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "python",
+      "package": "pypi.org/project/tx3-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/python",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    },
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "go",
+      "package": "github.com/tx3-lang/go-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/go",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    },
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "java",
+      "package": "land.tx3:tx3-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/java",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    },
+    {
+      "date": "2026-11-20T11:00:00Z",
+      "language": "swift",
+      "package": "github.com/tx3-lang/swift-sdk",
+      "package_version": "0.15.0",
+      "result": "pass",
+      "run_url": "https://example.test/swap/actions/1/swift",
+      "trix": "0.28.0",
+      "tx3c": "0.25.0"
+    }
+  ],
+  "result": "pass"
+}

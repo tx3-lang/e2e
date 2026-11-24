@@ -1,0 +1,11 @@
+{
+  "checked": [
+    "existing source",
+    "historical catalog",
+    "all registry namespaces"
+  ],
+  "coordinate": "example/swap",
+  "date": "2026-11-20T10:00:00Z",
+  "kind": "reconciliation",
+  "result": "new"
+}

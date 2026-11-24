@@ -1,0 +1,42 @@
+{
+  "coordinate": "open-tx3/wingriders-v2",
+  "evidence": {},
+  "history": [],
+  "id": "wingriders-v2",
+  "identity": null,
+  "missing": [
+    "release: no publication-pass record yet (version, digests, source tag, CI run, sign-off)",
+    "reconciliation: identity not yet checked against existing source, the historical catalog and every live registry namespace",
+    "resolution: waits on the release",
+    "clients: waits on the release",
+    "docs: waits on the release",
+    "tools: waits on the release",
+    "registry: waits on the release"
+  ],
+  "network": "mainnet",
+  "operation": "place_swap_request",
+  "protocol": "WingRiders V2",
+  "release": null,
+  "selection": {
+    "active wallets": {
+      "as_of": "read by 2026-11-24; the source shows no snapshot date",
+      "source": "https://poolflow.net/markets",
+      "value": "about 2,000 (WingRiders V2, rolling count)"
+    },
+    "activity": {
+      "as_of": "2026-11-15",
+      "source": "https://cardano.org/apps/leaderboard/",
+      "value": "22,179 transactions (whole dapp) in the 30 days to 2026-11-15"
+    },
+    "tvl": {
+      "as_of": "DefiLlama snapshots of 2026-11-23 to 2026-11-24",
+      "source": "https://defillama.com/chain/cardano",
+      "value": "about $0.71M"
+    }
+  },
+  "sign_off": null,
+  "status": "outstanding",
+  "team": "WingRiders",
+  "test_date": null,
+  "within_period": null
+}

@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-20T15:00:00Z",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "lending",
+    "network": "preprod",
+    "operation": "supply",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "tools",
+  "result": "pass",
+  "skill_url": "https://example.test/lending/skill",
+  "tool_operation": "supply",
+  "tools_url": "https://example.test/lending/tools",
+  "verification_url": "https://example.test/lending/tools/verification"
+}

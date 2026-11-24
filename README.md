@@ -116,6 +116,21 @@ would misrepresent (and drop macOS). Triggers: pushes to `main` touching `run.sh
 
 Journeys that need secrets (live network) would run in a separate, secrets-gated job.
 
+## Protocol onboarding inventory
+
+[`inventory/README.md`](inventory/README.md) is the public inventory of onboarded protocols. For
+each protocol it shows whether the full bundle is complete for one release: the released
+interface, a decoded public TRP resolution, six client builds, docs, MCP tools and Skill. It is
+generated from dated evidence records under `inventory/evidence/` by
+`inventory/lib/inventory.py`, which needs only `python3`. Journey `13-public-resolution` produces
+the live resolution and registry evidence. [`inventory/REFRESH.md`](inventory/REFRESH.md)
+documents how each release refreshes its row.
+
+- `.github/workflows/inventory.yml` runs the offline tests (decoder, effect comparison, join, link
+  checker) and checks that the committed rows match their evidence, without network access.
+- `.github/workflows/inventory-refresh.yml` is dispatched per protocol. It runs journey 13 on the
+  stable channel and opens a generated evidence PR.
+
 ## Adding a journey
 
 See the **`add-e2e-journey` skill** (`skills/add-e2e-journey/SKILL.md`) — the canonical guide for
