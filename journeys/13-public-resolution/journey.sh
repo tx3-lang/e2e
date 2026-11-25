@@ -23,21 +23,38 @@ command -v jq >/dev/null 2>&1 || die "jq is required to read the spec"
 command -v python3 >/dev/null 2>&1 || die "python3 is required to decode the result"
 OUT="${PUBLIC_RESOLUTION_OUT:-${PWD}/evidence}"
 mkdir -p "${OUT}"
+rm -f "${OUT}/resolution.json" "${OUT}/registry.json"
 
 field() { jq -r "$1 // empty" "${SPEC}"; }
 scope="$(field .identity.scope)"; name="$(field .identity.name)"
 version="$(field .identity.version)"; network="$(field .identity.network)"
 ref="${scope}/${name}:${version}"
 
-# Any failure before the endpoint answers still leaves a dated record that
-# keeps the row outstanding with the reason.
-outstanding() {
-  python3 "${INVENTORY}" resolution --spec "${SPEC}" --out "${OUT}" --error "$1" >/dev/null
-  die "$1"
-}
+# A refresh after the release's resolution passed keeps that evidence and
+# rechecks only the registry entry (inventory/REFRESH.md), so a later failure
+# is recorded against the registry.
+KIND=resolution
+[[ "$(jq -r '.resolve' "${SPEC}")" == "false" ]] && KIND=registry
 
 # last_line <file> — the last non-blank line, without diagnostic box drawing.
 last_line() { grep -v '^[[:space:]]*$' "$1" | tail -n1 | sed 's/^[^[:alnum:]]*//'; }
+
+# Every failure leaves a dated record that keeps the row outstanding with the reason.
+record_error() { python3 "${INVENTORY}" "$1" --spec "${SPEC}" --out "${OUT}" --error "$2" >/dev/null; }
+outstanding() { record_error "${KIND}" "$1"; die "$1"; }
+
+# check <kind> <args…> — write one record; a check that leaves none still records why.
+check() {
+  local kind="$1"; shift
+  if python3 "${INVENTORY}" "${kind}" --spec "${SPEC}" --out "${OUT}" "$@" > "${LAST_OUTPUT_FILE}" 2>&1; then
+    ok "$(cat "${LAST_OUTPUT_FILE}")"
+    return 0
+  fi
+  err "$(cat "${LAST_OUTPUT_FILE}")"
+  [[ -f "${OUT}/${kind}.json" ]] \
+    || record_error "${kind}" "the ${kind} check left no record: $(last_line "${LAST_OUTPUT_FILE}")"
+  return 1
+}
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -70,37 +87,27 @@ commit="$(jq -r '.commit_sha // empty' "${CACHE}/metadata.json")"
 ok "manifest ${manifest} and TII ${tii} match the release"
 
 # 3. Resolve the example twice on the network's public TRP: live chain state
-# in, unsigned CBOR out, nothing signed or submitted. The keys are the public
-# ones trix ships for these endpoints.
-case "${network}" in
-  mainnet) url="https://cardano-mainnet.trp-m1.demeter.run"; key="trp1lrnhzcax5064cgxsaup" ;;
-  preprod) url="https://cardano-preprod.trp-m1.demeter.run"; key="trp1mtg35n2n9lv7yauanfa" ;;
-  preview) url="https://cardano-preview.trp-m1.demeter.run"; key="trp1ffyf88ugcyg6j6n3yuh" ;;
-  *) outstanding "no public TRP endpoint is known for network '${network}'" ;;
-esac
-endpoint="${TRP_ENDPOINT:-${url}}"
-python3 "${INVENTORY}" request --spec "${SPEC}" --tii "${CACHE}/main.tii" > request.json 2> request.err \
-  || outstanding "$(last_line request.err)"
-for n in 1 2; do
-  info "→ trp.resolve ${n}/2 on ${endpoint}"
-  curl -sS --max-time 120 -X POST "${endpoint}" -H 'content-type: application/json' \
-    -H "dmtr-api-key: ${TRP_API_KEY:-${key}}" --data @request.json -o "response-${n}.json" || true
-done
-
+# in, unsigned CBOR out, nothing signed or submitted. The key is the public
+# one trix ships for that endpoint.
 failed=0
-if python3 "${INVENTORY}" resolution --spec "${SPEC}" --endpoint "${endpoint}" \
-    --response response-1.json --response response-2.json --out "${OUT}" > "${LAST_OUTPUT_FILE}"; then
-  ok "$(cat "${LAST_OUTPUT_FILE}")"
+if [[ "${KIND}" == "resolution" ]]; then
+  trp="$(python3 "${INVENTORY}" endpoint --network "${network}" 2> endpoint.err)" \
+    || outstanding "$(last_line endpoint.err)"
+  endpoint="${TRP_ENDPOINT:-${trp% *}}"
+  python3 "${INVENTORY}" request --spec "${SPEC}" --tii "${CACHE}/main.tii" > request.json 2> request.err \
+    || outstanding "$(last_line request.err)"
+  for n in 1 2; do
+    info "→ trp.resolve ${n}/2 on ${endpoint}"
+    curl -sS --max-time 120 -X POST "${endpoint}" -H 'content-type: application/json' \
+      -H "dmtr-api-key: ${TRP_API_KEY:-${trp#* }}" --data @request.json -o "response-${n}.json" || true
+  done
+  check resolution --endpoint "${endpoint}" --response response-1.json --response response-2.json || failed=1
 else
-  err "$(cat "${LAST_OUTPUT_FILE}")"; failed=1
+  info "the release's resolution already passed; rechecking only its registry entry"
 fi
 
 # 4. The registry entry: the README's bundle references, and every link answers.
-if python3 "${INVENTORY}" registry --spec "${SPEC}" --readme "${CACHE}/README.md" --out "${OUT}" > "${LAST_OUTPUT_FILE}"; then
-  ok "$(cat "${LAST_OUTPUT_FILE}")"
-else
-  err "$(cat "${LAST_OUTPUT_FILE}")"; failed=1
-fi
+check registry --readme "${CACHE}/README.md" || failed=1
 
 info "evidence records written to ${OUT}"
 [[ "${failed}" == "0" ]] || die "${ref} stays outstanding; the records say why"

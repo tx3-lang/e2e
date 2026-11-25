@@ -105,5 +105,11 @@
       "url": "https://example.test/swap/tree/v0.1.0"
     }
   ],
+  "links_checked": {
+    "docs_url": "https://example.test/swap/docs",
+    "example_url": "https://example.test/swap/docs/example",
+    "skill_url": "https://example.test/swap/skill",
+    "tools_url": "https://example.test/swap/tools"
+  },
   "result": "pass"
 }

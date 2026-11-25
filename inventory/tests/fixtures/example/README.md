@@ -6,7 +6,7 @@ Fixture data only: one complete row and one row outstanding for a missing client
 
 Milestone period: 2026-10-01 to 2026-11-30. Test dates are the actual UTC dates of each run.
 
-New protocols complete: 1 of 2. Each new identity counts once across networks and releases; the baseline below is listed separately and is not counted.
+New protocols complete: 1 of 2 (example/swap). Each new identity counts once across networks and releases; the baseline below is listed separately and is not counted.
 
 | Protocol | Team | Operation | Network | Release | Status | Test date |
 |---|---|---|---|---|---|---|

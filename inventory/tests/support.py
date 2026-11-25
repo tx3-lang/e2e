@@ -59,13 +59,23 @@ FUNDING = bytes.fromhex("e5" * 32)
 OFFERED, BATCHER_FEE, DEPOSIT, MIN_RECEIVE = 10_000_000, 2_000_000, 2_000_000, 4_321_000
 
 
-def order_tx(network=0, offered=OFFERED, receiver=USER_KEY, direction=0, min_receive=MIN_RECEIVE) -> str:
-    """A swap order paid to a script address with an inline datum (hex)."""
-    order_address = bytes([0x10 | network]) + ORDER_SCRIPT + USER_STAKE
+def order_output(network=0, offered=OFFERED, receiver=USER_KEY, direction=0, min_receive=MIN_RECEIVE,
+                 script=ORDER_SCRIPT, assets=None, datum=None) -> dict:
+    """The swap order output: lovelace, optional multi-assets and an inline datum."""
+    order_address = bytes([0x10 | network]) + script + USER_STAKE
+    if datum is None:
+        datum = constr(0, constr(0, USER_KEY), constr(0, receiver), POOL_LP, constr(direction), min_receive, BATCHER_FEE)
+    lovelace = offered + BATCHER_FEE + DEPOSIT
+    return {0: order_address, 1: [lovelace, assets] if assets else lovelace, 2: [1, Tag(24, cbor(datum))]}
+
+
+def order_tx(network=0, before=(), network_id=None, **output) -> str:
+    """A swap order paid to a script address with an inline datum (hex); `before` outputs come first."""
     user_address = bytes([0x00 | network]) + USER_KEY + USER_STAKE
-    datum = constr(0, constr(0, USER_KEY), constr(0, receiver), POOL_LP, constr(direction), min_receive, BATCHER_FEE)
-    order = {0: order_address, 1: offered + BATCHER_FEE + DEPOSIT, 2: [1, Tag(24, cbor(datum))]}
-    body = {0: Tag(258, [[FUNDING, 0]]), 1: [order, [user_address, 30_000_000]], 2: 180_000}
+    outputs = [*before, order_output(network, **output), [user_address, 30_000_000]]
+    body = {0: Tag(258, [[FUNDING, 0]]), 1: outputs, 2: 180_000}
+    if network_id is not None:
+        body[15] = network_id
     return cbor([body, {}, True, None]).hex()
 
 
@@ -126,9 +136,10 @@ def complete_records(ident, day="2026-11-20") -> list:
     reply = {"result": {"tx": tx, "hash": inventory.decode_tx(tx)["tx_hash"]}}
     resolution, _ = inventory.resolution_record(s, "https://trp.example.test", [reply, reply], stamp(12))
     registry = inventory.registry_record(s, readme_for(s), stamp(13), get=lambda url: {"status": 200, "ok": True})
-    clients = [
-        {"language": language, "package": marker, "package_version": "0.15.0", "tx3c": "0.25.0", "trix": "0.28.0",
-         "run_url": f"{s['links']['ci_run']}/{language}", "date": stamp(11), "result": "pass"}
+    clients = [  # the client checks' row shape (`client_check.py row`)
+        {**ident, "language": language, "runtime_package": marker, "runtime_version": "0.15.0",
+         "tx3c_version": "0.25.0", "trix_version": "0.28.0", "run_url": f"{s['links']['ci_run']}/{language}",
+         "date": stamp(11), "result": "pass", "reason": ""}
         for language, marker in LANGUAGES.items()
     ]
     return [
@@ -159,7 +170,7 @@ BASELINE = {"groups": [{"title": "Milestone 1.1", "entries": [
 
 
 def row(records, **proto_overrides) -> dict:
-    """Join records (dates sorted as the inventory reads them) into a row."""
+    """Join records (sorted as the inventory reads them) into a row."""
     recs = [dict(r, _file=f"evidence/x/{i:02d}-{r['kind']}.json") for i, r in enumerate(records)]
-    recs.sort(key=lambda r: (r.get("date") or "", r["_file"]))
+    recs.sort(key=inventory.order_key)
     return inventory.build_row(CONFIG, BASELINE, proto(**proto_overrides), recs)

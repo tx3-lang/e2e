@@ -22,17 +22,22 @@ class CborMap(list):
     """A CBOR map kept as (key, value) pairs: Plutus map keys may be lists."""
 
 
+def _at(buf: bytes, i: int, size: int = 1) -> int:
+    """Offset `i`, after checking that `size` bytes follow it."""
+    if i + size > len(buf):
+        raise ValueError("truncated CBOR")
+    return i
+
+
 def _decode(buf: bytes, i: int):
     """Decode the item at offset `i`; return (value, offset after it)."""
-    if i >= len(buf):
-        raise ValueError("truncated CBOR")
-    major, info = buf[i] >> 5, buf[i] & 31
+    major, info = buf[_at(buf, i)] >> 5, buf[i] & 31
     i += 1
     if info < 24:
         arg = info
     elif info <= 27:
         size = 1 << (info - 24)
-        arg = int.from_bytes(buf[i : i + size], "big")
+        arg = int.from_bytes(buf[_at(buf, i, size) : i + size], "big")
         i += size
     elif info == 31 and major in (2, 3, 4, 5):
         arg = None
@@ -46,16 +51,16 @@ def _decode(buf: bytes, i: int):
     if major in (2, 3):
         if arg is None:
             chunks = []
-            while buf[i] != 0xFF:
+            while buf[_at(buf, i)] != 0xFF:
                 chunk, i = _decode(buf, i)
                 chunks.append(chunk)
             data = b"".join(chunks) if major == 2 else "".join(chunks)
             return data, i + 1
-        data = bytes(buf[i : i + arg])
+        data = bytes(buf[_at(buf, i, arg) : i + arg])
         return (data if major == 2 else data.decode()), i + arg
     if major in (4, 5):
         items = [] if major == 4 else CborMap()
-        while (len(items) < arg) if arg is not None else buf[i] != 0xFF:
+        while (len(items) < arg) if arg is not None else buf[_at(buf, i)] != 0xFF:
             item, i = _decode(buf, i)
             if major == 5:
                 value, i = _decode(buf, i)
@@ -166,10 +171,18 @@ def _output(item) -> dict:
 
 
 def decode_tx(tx_hex: str) -> dict:
-    """Summarize one complete transaction given as hex."""
-    raw = bytes.fromhex(tx_hex.strip())
+    """Summarize one complete transaction given as hex; ValueError for anything else."""
+    if not isinstance(tx_hex, str):
+        raise ValueError(f"expected transaction hex, got {type(tx_hex).__name__}")
+    try:
+        return _summary(bytes.fromhex(tx_hex.strip()))
+    except (TypeError, KeyError, IndexError, AttributeError, RecursionError) as err:
+        raise ValueError(f"malformed transaction: {type(err).__name__}: {err}") from None
+
+
+def _summary(raw: bytes) -> dict:
     tx, end = _decode(raw, 0)
-    if end != len(raw) or not isinstance(tx, list) or len(tx) != 4:
+    if end != len(raw) or not isinstance(tx, list) or len(tx) != 4 or not isinstance(tx[0], CborMap):
         raise ValueError("not one complete Conway-era transaction")
     _, body_end = _decode(raw, 1)
     body = dict(tx[0])

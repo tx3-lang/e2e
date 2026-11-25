@@ -101,6 +101,30 @@ class Outstanding(unittest.TestCase):
             r["missing"],
         )
 
+    def test_an_old_version_conflict_does_not_block_the_current_release(self):
+        records = complete_records(identity())
+        old = copy.deepcopy(records[0])
+        old.update(identity=identity(version="0.0.9"), date="2026-11-01T09:00:00Z")
+        clash = copy.deepcopy(old)
+        clash["identity"]["manifest_digest"] = "sha256:" + "9" * 64
+        r = row(records + [old, clash])
+        self.assertEqual((r["status"], r["missing"]), ("complete", []))
+        self.assertEqual([h["reason"] for h in r["history"] if h["version"] == "0.0.9"],
+                         ["version 0.0.9 recorded with conflicting identities"] * 2)
+
+    def test_a_release_without_a_version_cannot_break_the_join(self):
+        records = complete_records(identity())
+        unversioned = copy.deepcopy(records[0])
+        unversioned["identity"]["version"] = None
+        r = row(records + [unversioned])
+        self.assertEqual((r["identity"]["version"], r["status"]), ("0.1.0", "complete"))
+
+    def test_language_row_for_another_release(self):
+        records = complete_records(identity())
+        next(rec for rec in records if rec["kind"] == "clients")["languages"][0]["version"] = "0.0.9"
+        first = next(iter(CONFIG["clients"]))
+        self.assertEqual(row(records)["missing"], [f"clients: {first} row is for another release (version 0.0.9)"])
+
     def test_release_without_a_digest(self):
         records = replace(complete_records(identity()), "release", identity=dict(identity(), tii_digest=None))
         self.assertIn("release: tii_digest missing", row(records)["missing"])
@@ -135,7 +159,7 @@ class Rendering(unittest.TestCase):
         baseline = dict(BASELINE, summary="B", registry_page="https://tx3.land/protocol/")
         for rows in ([done, waiting], [waiting, done]):
             text = inventory.render_markdown(cfg, baseline, rows)
-            self.assertIn("New protocols complete: 1 of 2.", text)
+            self.assertIn("New protocols complete: 1 of 2 (example/swap).", text)
             self.assertIn("| [example/swap](#swap) | Example team | `place_order` | preprod | `example/swap:0.1.0` | complete |", text)
             self.assertIn("outstanding (7)", text)
 

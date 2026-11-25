@@ -77,6 +77,13 @@ class SyntheticTransactions(unittest.TestCase):
             with self.assertRaises(ValueError):
                 decode_tx(bad)
 
+    def test_malformed_input_is_a_value_error(self):
+        # truncated indefinite array, a body that is not a map, a non-string, deep nesting, short bytes
+        for bad in ("849f", "8400000000", 42, None, "9f" * 3000, "8458ff", "84a1007f", "84a100d9"):
+            with self.subTest(bad=bad if not isinstance(bad, str) else bad[:12]):
+                with self.assertRaises(ValueError):
+                    decode_tx(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

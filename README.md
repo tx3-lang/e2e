@@ -127,9 +127,11 @@ the live resolution and registry evidence. [`inventory/REFRESH.md`](inventory/RE
 documents how each release refreshes its row.
 
 - `.github/workflows/inventory.yml` runs the offline tests (decoder, effect comparison, join, link
-  checker) and checks that the committed rows match their evidence, without network access.
-- `.github/workflows/inventory-refresh.yml` is dispatched per protocol. It runs journey 13 on the
-  stable channel and opens a generated evidence PR.
+  checker, and journey 13 against a fake `trix` and a loopback TRP) and checks that the committed
+  rows match their evidence, without network access. On `main` it opens a correction PR when the
+  committed rendering no longer matches its evidence.
+- `.github/workflows/inventory-refresh.yml` is dispatched per protocol. A read-only job runs journey
+  13 on the stable channel; a separate job stores its records and opens a generated evidence PR.
 
 ## Adding a journey
 

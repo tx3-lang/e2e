@@ -19,12 +19,18 @@ Skill links, and that each link answers.
   auto-discovered suite.
 - **Output:** dated `resolution` and `registry` records, plus the unsigned CBOR under
   `cbor/<tx hash>.hex`, in `PUBLIC_RESOLUTION_OUT` (default `./evidence`). A failed pull, a digest
-  mismatch, an endpoint error, a mismatched effect or CBOR that a second identical request does
-  not reproduce byte for byte all write an `outstanding` record with the reason, and fail the
-  journey.
+  mismatch, an endpoint error or malformed reply, a mismatched effect, CBOR that a second
+  identical request does not reproduce byte for byte, or a check that fails unexpectedly all write
+  an `outstanding` record with the reason, and fail the journey.
+- **Registry-only refresh:** when the spec says `"resolve": false` (the release already has a
+  passing resolution and the refresh was not asked to resolve again), the journey pulls and
+  verifies the release, skips the resolution and writes only the `registry` record. A failure is
+  then recorded against the registry, and the passing resolution stays current.
 - **Endpoint:** the network's public Demeter TRP with the public key trix ships, as in
-  `trix`'s known networks. `TRP_ENDPOINT` / `TRP_API_KEY` override them. The record names
-  the endpoint and never a key.
+  `trix`'s known networks (`inventory.py endpoint --network <network>`). `TRP_ENDPOINT` /
+  `TRP_API_KEY` override them. The record names the endpoint and never a key.
+- **Offline test:** `inventory/tests/test_journey.py` runs this journey through `run.sh` with a fake
+  `trix` and a loopback TRP that returns the golden preprod Transfer.
 
 The inventory refresh workflow (`.github/workflows/inventory-refresh.yml`) runs this journey
 for one protocol and turns its records into an evidence PR; see `inventory/REFRESH.md`.
