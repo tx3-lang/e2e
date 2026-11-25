@@ -17,6 +17,7 @@ on:
       - 'lib/**'
       - '.github/workflows/dx-e2e-beta.yml'
       - '.github/actions/dx-e2e-run/**'
+      - '.github/actions/setup-maven/**'
   pull_request:
     paths:
       - 'run.sh'
@@ -24,6 +25,7 @@ on:
       - 'lib/**'
       - '.github/workflows/dx-e2e-beta.yml'
       - '.github/actions/dx-e2e-run/**'
+      - '.github/actions/setup-maven/**'
   workflow_dispatch:
 
 permissions:
