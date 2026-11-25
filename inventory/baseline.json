@@ -1,0 +1,31 @@
+{
+  "summary": "Protocols already in the registry before this onboarding round. They are listed so each new protocol can be reconciled against them, and none of them counts as new: the Catalyst Fund 14 onboardings and the Milestone 1.1 onboardings, Transfer included.",
+  "registry_page": "https://tx3.land/protocol/",
+  "groups": [
+    {
+      "id": "fund-14",
+      "title": "Catalyst Fund 14",
+      "entries": [
+        {"protocol": "Bodega Market", "coordinate": "open-tx3/bodega-market", "version": "0.1.0"},
+        {"protocol": "Fluid Aquarium", "coordinate": "open-tx3/fluid-aquarium", "version": "0.1.0"},
+        {"protocol": "Indigo", "coordinate": "open-tx3/indigo", "version": "2.0.0"},
+        {"protocol": "Strike staking", "coordinate": "open-tx3/strike-staking", "version": "0.1.0"},
+        {"protocol": "VyFi", "coordinate": "open-tx3/vyfi", "version": "0.1.0"}
+      ]
+    },
+    {
+      "id": "m1-1",
+      "title": "Milestone 1.1",
+      "entries": [
+        {"protocol": "SundaeSwap v3", "coordinate": "sundaeswap-finance/sundae-v3", "version": "0.1.0"},
+        {"protocol": "Snek.fun", "coordinate": "open-tx3/snek-fun", "version": "0.1.0"},
+        {"protocol": "Githoney bounties", "coordinate": "open-tx3/githoney-bounties", "version": "0.1.0"},
+        {"protocol": "Githoney badges", "coordinate": "open-tx3/githoney-badges", "version": "0.1.0"},
+        {"protocol": "Asteria", "coordinate": "open-tx3/asteria", "version": "0.1.0"},
+        {"protocol": "Transfer", "coordinate": "open-tx3/transfer", "version": "0.1.0"},
+        {"protocol": "Hydra heads", "coordinate": "open-tx3/hydra-heads", "version": "0.0.0"},
+        {"protocol": "Partner chain governance", "coordinate": "open-tx3/partner-chain-gov", "version": "0.1.0"}
+      ]
+    }
+  ]
+}

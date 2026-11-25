@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-20T15:00:00Z",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "swap",
+    "network": "preprod",
+    "operation": "place_order",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "tools",
+  "result": "pass",
+  "skill_url": "https://example.test/swap/skill",
+  "tool_operation": "place_order",
+  "tools_url": "https://example.test/swap/tools",
+  "verification_url": "https://example.test/swap/tools/verification"
+}

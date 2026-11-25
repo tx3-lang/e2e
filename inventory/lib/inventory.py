@@ -1,0 +1,865 @@
+#!/usr/bin/env python3
+"""The protocol onboarding inventory: dated evidence in, public rows out.
+
+`record` and `ingest` add evidence under `evidence/<protocol>/`; `render`
+joins it into `rows/<protocol>.json` and `README.md`. `spec`, `request`,
+`resolution` and `registry` back the public-resolution journey. Standard
+library only, so CI and a third party need nothing installed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cardano_tx import decode_tx  # noqa: E402
+
+DEFAULT_ROOT = Path(__file__).resolve().parents[1]
+IDENTITY = ("scope", "name", "version", "manifest_digest", "tii_digest", "git_sha", "network", "operation")
+BUNDLE = ("resolution", "clients", "docs", "tools", "registry")
+KINDS = ("release", "reconciliation") + BUNDLE
+RELEASE_FIELDS = ("date", "source_tag", "source_url", "ci_run", "registry_url")
+# A language row as the client checks' `client_check.py combine` emits it.
+LANGUAGE_FIELDS = ("runtime_package", "runtime_version", "tx3c_version", "trix_version", "run_url", "date")
+# The bundle links a release README carries, and the record kind that names each.
+LINKS = {"docs_url": "docs", "example_url": "docs", "tools_url": "tools", "skill_url": "tools"}
+LISTS = {"clients": ("languages",), "registry": ("checks", "links"), "resolution": ("checks",)}
+FORBIDDEN_KEYS = {"headers", "api_key", "dmtr-api-key", "token", "secret", "password", "mnemonic", "env"}
+# Each network's public TRP and the public key trix ships for it.
+PUBLIC_TRP = {
+    "mainnet": ("https://cardano-mainnet.trp-m1.demeter.run", "trp1lrnhzcax5064cgxsaup"),
+    "preprod": ("https://cardano-preprod.trp-m1.demeter.run", "trp1mtg35n2n9lv7yauanfa"),
+    "preview": ("https://cardano-preview.trp-m1.demeter.run", "trp1ffyf88ugcyg6j6n3yuh"),
+}
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime(STAMP)
+
+
+def utc(value) -> str:
+    """A record date normalized to a UTC timestamp such as 2026-11-20T12:00:00Z."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if "T" in value else None
+        if parsed is not None and parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).strftime(STAMP)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    raise ValueError(f"date {value!r} is not a UTC timestamp such as 2026-11-20T12:00:00Z")
+
+
+def load(path):
+    return json.loads(Path(path).read_text())
+
+
+def dump(data) -> str:
+    return json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def semver(version) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", str(version or ""))[:3])
+
+
+def identity_of(rec) -> dict:
+    return {k: (rec.get("identity") or {}).get(k) for k in IDENTITY}
+
+
+def order_key(rec) -> tuple:
+    """Oldest first: the UTC instant, then the collision index (`x.json`, `x-2.json`, `x-10.json`)."""
+    try:
+        instant = utc(rec.get("date"))
+    except ValueError:
+        instant = ""
+    suffix = re.search(r"-(\d+)\.json$", rec.get("_file", ""))
+    return instant, int(suffix.group(1)) if suffix else 1, rec.get("_file", "")
+
+
+def records(root: Path, pid: str) -> list:
+    """Every stored record, oldest first. A malformed one keeps only its diagnosis
+    (`_invalid`): it stays in the history and out of the join."""
+    folder = root / "evidence" / pid
+    found = []
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        try:
+            rec = load(path)
+            problems = shape_problems(rec) if isinstance(rec, dict) else ["not a JSON object"]
+        except ValueError as err:
+            rec, problems = {}, [f"not JSON ({err})"]
+        if problems:
+            kept = rec if isinstance(rec, dict) else {}
+            rec = {k: kept[k] for k in ("kind", "date") if isinstance(kept.get(k), str)}
+            rec["_invalid"] = "; ".join(problems)
+        rec["_file"] = f"evidence/{pid}/{path.name}"
+        found.append(rec)
+    return sorted(found, key=order_key)
+
+
+def joinable(recs) -> list:
+    return [r for r in recs if "_invalid" not in r]
+
+
+def current_release(recs):
+    releases = [r for r in recs if r.get("kind") == "release"]
+    if not releases:
+        return None
+    return max(releases, key=lambda r: (semver(identity_of(r)["version"]), order_key(r)))
+
+
+def latest(recs, kind, ident) -> dict:
+    """The newest `kind` record for the release `ident`. Unless its version is conflicted, evidence
+    keyed to any release record of that version counts: such records differ only in fields one left
+    empty and another filled, so a correction keeps what was verified before it."""
+    same = [ident]
+    if ident["version"] not in conflicted_versions(recs):
+        releases = [identity_of(r) for r in recs if r.get("kind") == "release"]
+        same += [other for other in releases if other["version"] == ident["version"]]
+    found = [r for r in recs if r.get("kind") == kind and identity_of(r) in same]
+    return found[-1] if found else {}
+
+
+# --- the join ---------------------------------------------------------------
+
+
+def _result(rec) -> list:
+    return [] if rec.get("result") == "pass" else [rec.get("reason") or f"result {rec.get('result', 'absent')}"]
+
+
+def _resolution_gaps(rec, ident, cfg, current) -> list:
+    if rec.get("result") != "pass":
+        return _result(rec)
+    gaps = [f"{k} missing" for k in ("endpoint", "tx_hash", "cbor", "inputs") if not rec.get(k)]
+    if rec.get("verdict") != "match":
+        gaps.append("decoded effects not matched")
+    if not rec.get("reproducible"):
+        gaps.append("unsigned CBOR not reproduced byte for byte")
+    return gaps
+
+
+def _client_gaps(rec, ident, cfg, current) -> list:
+    rows = {row.get("language"): row for row in rec.get("languages", [])}
+    gaps = []
+    for language in cfg["clients"]:
+        row = rows.get(language)
+        if row is None:
+            gaps.append(f"{language} record missing")
+            continue
+        absent = [f for f in LANGUAGE_FIELDS if not row.get(f)]
+        if absent:
+            gaps.append(f"{language} missing {', '.join(absent)}")
+        other = [f"{k} {row[k]}" for k in IDENTITY if row.get(k) and row[k] != ident[k]]
+        if other:
+            gaps.append(f"{language} row is for another release ({', '.join(other)})")
+        if row.get("result") != "pass":
+            why = f" ({row['reason']})" if row.get("reason") else ""
+            gaps.append(f"{language} result {row.get('result', 'absent')}{why}")
+    return gaps
+
+
+def _docs_gaps(rec, ident, cfg, current) -> list:
+    return _result(rec) + [f"{k} missing" for k in ("docs_url", "example_url") if not rec.get(k)]
+
+
+def _tools_gaps(rec, ident, cfg, current) -> list:
+    gaps = _result(rec) + [f"{k} missing" for k in ("tools_url", "skill_url", "verification_url") if not rec.get(k)]
+    if rec.get("tool_operation") != ident["operation"]:
+        gaps.append(f"tool operation {rec.get('tool_operation')} differs from {ident['operation']}")
+    return gaps
+
+
+def _registry_gaps(rec, ident, cfg, current) -> list:
+    if rec.get("result") != "pass" and not rec.get("links_checked"):
+        return _result(rec)  # the pull or a digest failed before any link was checked
+    gaps = [f"README lacks {c.get('effect')}" for c in rec.get("checks", []) if not c.get("passed")]
+    gaps += [f"dead link {link.get('url')} ({link.get('status')})" for link in rec.get("links", []) if not link.get("ok")]
+    checked = rec.get("links_checked") or {}
+    moved = [k for k, kind in LINKS.items() if current.get(kind, {}).get(k) and checked.get(k) != current[kind][k]]
+    if moved:
+        gaps.append(f"checked older links ({', '.join(moved)}); rerun the registry check for the current ones")
+    return gaps or _result(rec)
+
+
+GAPS = {
+    "resolution": _resolution_gaps,
+    "clients": _client_gaps,
+    "docs": _docs_gaps,
+    "tools": _tools_gaps,
+    "registry": _registry_gaps,
+}
+
+
+def conflicted_versions(recs) -> set:
+    """Versions whose release records state two different values for one identity field.
+    A field one record leaves empty and a later one states is a correction, not a conflict."""
+    seen = {}
+    for rec in recs:
+        if rec.get("kind") == "release":
+            fields = seen.setdefault(identity_of(rec)["version"], {})
+            for k, v in identity_of(rec).items():
+                if v:
+                    fields.setdefault(k, set()).add(v)
+    return {version for version, fields in seen.items() if any(len(values) > 1 for values in fields.values())}
+
+
+def _release_gaps(proto, recs, release) -> list:
+    if release is None:
+        return ["release: no publication-pass record yet (version, digests, source tag, CI run, sign-off)"]
+    ident = identity_of(release)
+    gaps = []
+    if ident["version"] in conflicted_versions(recs):
+        gaps.append(f"release: version {ident['version']} recorded with conflicting identities; "
+                    "a published version is never replaced")
+    gaps += [f"release: {k} missing" for k in IDENTITY if not ident[k]]
+    gaps += [f"release: {k} missing" for k in RELEASE_FIELDS if not release.get(k)]
+    actual = {
+        "coordinate": f"{ident['scope']}/{ident['name']}",
+        "network": ident["network"],
+        "operation": ident["operation"],
+    }
+    gaps += [
+        f"release: {k} {actual[k]} differs from the selected {proto[k]}"
+        for k in actual
+        if actual[k] != proto[k]
+    ]
+    sign_off = (release.get("sign_off") or {}).get("status") or "absent"
+    if sign_off != "recorded":
+        gaps.append(f"release: owner sign-off {sign_off}; the publication pass records it")
+    return gaps
+
+
+def build_row(cfg, baseline, proto, stored) -> dict:
+    recs = joinable(stored)
+    release = current_release(recs)
+    ident = identity_of(release) if release else None
+    missing = _release_gaps(proto, recs, release)
+
+    checked = [r for r in recs if r.get("kind") == "reconciliation" and r.get("coordinate") == proto["coordinate"]]
+    if not checked:
+        missing.append(
+            "reconciliation: identity not yet checked against existing source, "
+            "the historical catalog and every live registry namespace"
+        )
+    elif checked[-1].get("result") != "new":
+        missing.append(f"reconciliation: {checked[-1].get('result')}: {checked[-1].get('reason', 'not a new identity')}")
+    for group in baseline["groups"]:
+        if any(e["coordinate"] == proto["coordinate"] for e in group["entries"]):
+            missing.append(f"reconciliation: {proto['coordinate']} is already counted in {group['title']}")
+
+    evidence = {}
+    current = {kind: latest(recs, kind, ident) for kind in BUNDLE} if ident else {}
+    for kind in BUNDLE:
+        if ident is None:
+            missing.append(f"{kind}: waits on the release")
+            continue
+        same_kind = [r for r in recs if r.get("kind") == kind]
+        rec = current[kind]
+        if not rec:
+            if same_kind:
+                other = identity_of(same_kind[-1])
+                differs = [k for k in IDENTITY if other[k] != ident[k]]
+                named = [f"{k} {other[k]}" for k in differs if other[k]] or [f"{k} unstated" for k in differs]
+                missing.append(f"{kind}: latest evidence is for another release ({', '.join(named)}); "
+                               f"rerun it for {ident['version']}")
+            else:
+                missing.append(f"{kind}: no evidence for {ident['version']} yet")
+            continue
+        evidence[kind] = {"file": rec["_file"], "date": rec.get("date")}
+        missing += [f"{kind}: {gap}" for gap in GAPS[kind](rec, ident, cfg, current)]
+
+    test_date = evidence.get("resolution", {}).get("date")
+    period = cfg["milestone"]["period"]
+    conflicts = conflicted_versions(recs)
+    shown = {k: release.get(k) for k in RELEASE_FIELDS} if release else None
+    if shown:
+        # A correction keeps the version's first release date, the date it was published.
+        shown["date"] = next(r for r in recs if r.get("kind") == "release"
+                             and identity_of(r)["version"] == ident["version"]).get("date")
+    return {
+        "id": proto["id"],
+        "protocol": proto["protocol"],
+        "team": proto["team"],
+        "operation": proto["operation"],
+        "network": proto["network"],
+        "coordinate": proto["coordinate"],
+        "status": "outstanding" if missing else "complete",
+        "missing": missing,
+        "identity": ident,
+        "release": shown,
+        "sign_off": (release.get("sign_off") or {}).get("status") if release else None,
+        "evidence": evidence,
+        "test_date": test_date,
+        "within_period": (period["start"] <= test_date[:10] <= period["end"]) if test_date else None,
+        "selection": proto.get("selection"),
+        "history": [_history(r, conflicts) for r in stored],
+    }
+
+
+def _history(rec, conflicts) -> dict:
+    version = identity_of(rec)["version"]
+    reason = rec.get("_invalid") or rec.get("reason")
+    if not reason and rec.get("kind") == "release" and version in conflicts:
+        reason = f"version {version} recorded with conflicting identities"
+    return {"date": rec.get("date"), "kind": rec.get("kind"), "version": version,
+            "result": "invalid" if "_invalid" in rec else rec.get("result"), "reason": reason, "file": rec["_file"]}
+
+
+# --- rendering --------------------------------------------------------------
+
+
+def _cell(text) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _selection_lines(selection) -> list:
+    lines = []
+    for metric, data in (selection or {}).items():
+        if data.get("gap"):
+            lines.append(f"- {metric}: data gap: {data['gap']}")
+        else:
+            lines.append(f"- {metric}: {data['value']} ({data['as_of']}; [source]({data['source']}))")
+    return lines
+
+
+def render_markdown(cfg, baseline, rows) -> str:
+    period = cfg["milestone"]["period"]
+    # Naming the complete rows makes two evidence PRs that each change the count
+    # conflict on this line instead of merging into a wrong total.
+    done = [r["protocol"] for r in rows if r["status"] == "complete"]
+    out = [
+        f"# {cfg['title']}",
+        "",
+        "<!-- Generated by `python3 inventory/lib/inventory.py render` from `inventory/evidence/`. Do not edit. -->",
+        "",
+        cfg["summary"],
+        "",
+        f"Milestone period: {period['start']} to {period['end']}. Test dates are the actual UTC dates of each run.",
+        "",
+        f"New protocols complete: {len(done)} of {len(rows)}" + (f" ({', '.join(done)})" if done else "")
+        + ". Each new identity counts once across networks and releases; the baseline below is listed "
+        "separately and is not counted.",
+        "",
+        "| Protocol | Team | Operation | Network | Release | Status | Test date |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        release = f"`{r['coordinate']}:{r['identity']['version']}`" if r["identity"] else f"`{r['coordinate']}` unreleased"
+        status = "complete" if r["status"] == "complete" else f"outstanding ({len(r['missing'])})"
+        date = r["test_date"] or "-"
+        if r["within_period"] is False:
+            date += " (outside the period)"
+        out.append(
+            f"| [{r['protocol']}](#{r['id']}) | {r['team']} | `{r['operation']}` | {r['network']} | {release} | {status} | {date} |"
+        )
+    for r in rows:
+        out += ["", f'<a id="{r["id"]}"></a>', f"## {r['protocol']}", ""]
+        out.append(f"Team: {r['team']}. Operation `{r['operation']}` on {r['network']}, coordinate `{r['coordinate']}`.")
+        if r["missing"]:
+            out += ["", "Outstanding:", ""] + [f"- {_cell(m)}" for m in r["missing"]]
+        if r["identity"]:
+            out += ["", "| Field | Value |", "|---|---|"]
+            out += [f"| {k} | `{_cell(v)}` |" for k, v in r["identity"].items() if v]
+            out += [f"| {k} | {_cell(v)} |" for k, v in r["release"].items() if v]
+            out.append(f"| sign-off | {r['sign_off'] or 'absent'} (receipt kept internally) |")
+        if r["evidence"]:
+            out += ["", "Evidence:", ""]
+            out += [f"- {kind}: [{e['file']}]({e['file']}) ({e['date']})" for kind, e in r["evidence"].items()]
+        if r["selection"]:
+            out += ["", "Selection evidence:", ""] + _selection_lines(r["selection"])
+        if r["history"]:
+            out += ["", "| Date | Kind | Version | Result | Diagnosis |", "|---|---|---|---|---|"]
+            out += [
+                f"| {h['date']} | [{h['kind']}]({h['file']}) | {h['version'] or '-'} | {h['result'] or '-'} | {_cell(h['reason'] or '')} |"
+                for h in r["history"]
+            ]
+    out += ["", "## Baseline", "", baseline["summary"]]
+    for group in baseline["groups"]:
+        out += ["", f"### {group['title']} ({len(group['entries'])})", "", "| Protocol | Registry entry | Version |", "|---|---|---|"]
+        out += [
+            f"| {e['protocol']} | [{e['coordinate']}]({baseline['registry_page']}{e['coordinate']}) | {e['version']} |"
+            for e in group["entries"]
+        ]
+    out += ["", "How to reproduce a row and how a release refreshes it: [REFRESH.md](REFRESH.md).", ""]
+    return "\n".join(out)
+
+
+def render(root: Path, check: bool = False) -> int:
+    cfg, baseline = load(root / "protocols.json"), load(root / "baseline.json")
+    ids = [p["id"] for p in cfg["protocols"]]
+    coordinates = [p["coordinate"] for p in cfg["protocols"]]
+    if len(set(ids)) != len(ids) or len(set(coordinates)) != len(coordinates):
+        raise SystemExit("protocols.json lists a protocol id or coordinate twice; each identity counts once")
+    rows = [build_row(cfg, baseline, p, records(root, p["id"])) for p in cfg["protocols"]]
+    files = {root / "rows" / f"{r['id']}.json": dump(r) for r in rows}
+    files[root / "README.md"] = render_markdown(cfg, baseline, rows)
+    stale = [p for p, text in files.items() if not p.exists() or p.read_text() != text]
+    if check:
+        for path in stale:
+            print(f"out of date: {path.relative_to(root)} (run render)", file=sys.stderr)
+        return 1 if stale else 0
+    for path in stale:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(files[path])
+    return 0
+
+
+# --- evidence ---------------------------------------------------------------
+
+
+def _forbidden(data) -> list:
+    if isinstance(data, dict):
+        return [k for k in data if k.lower() in FORBIDDEN_KEYS] + [x for v in data.values() for x in _forbidden(v)]
+    if isinstance(data, list):
+        return [x for v in data for x in _forbidden(v)]
+    return []
+
+
+def url_problem(url):
+    """Why `url` is not an http(s) link, or None."""
+    if not isinstance(url, str):
+        return f"{url!r} is not a URL"
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return f"{url} is not a URL"
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return f"{url} is not an http(s) URL"
+    if any(ord(c) <= 32 or ord(c) >= 127 for c in url):
+        return f"{url} has spaces, controls or non-ASCII characters; percent-encode them"
+    return None
+
+
+def shape_problems(rec: dict) -> list:
+    """Why the join could not read a record; empty when its shape is sound."""
+    kind, ident = rec.get("kind"), rec.get("identity")
+    if kind not in KINDS:
+        return [f"unknown evidence kind {kind!r}; expected one of {', '.join(KINDS)}"]
+    problems = []
+    try:
+        utc(rec.get("date"))
+    except ValueError as err:
+        problems.append(str(err))
+    if ident is not None and not (isinstance(ident, dict) and all(isinstance(v, (str, type(None))) for v in ident.values())):
+        problems.append("identity is not an object of strings")
+    elif kind == "release" and not all(isinstance((ident or {}).get(k), str) for k in ("scope", "name", "version")):
+        problems.append("a release names its identity's scope, name and version")
+    elif kind in BUNDLE and ident is None:
+        problems.append(f"a {kind} record names the release it is evidence for")
+    if not isinstance(rec.get("sign_off") or {}, dict):
+        problems.append("sign_off is not an object")
+    problems += [f"{k} is not text" for k in ("result", "reason", "coordinate") if not isinstance(rec.get(k) or "", str)]
+    for key in LISTS.get(kind, ()):
+        if not (isinstance(rec.get(key, []), list) and all(isinstance(x, dict) for x in rec.get(key, []))):
+            problems.append(f"{key} is not a list of objects")
+    if not isinstance(rec.get("links_checked", {}), dict):
+        problems.append("links_checked is not an object")
+    languages = rec.get("languages") if isinstance(rec.get("languages"), list) else []
+    rows = [x for x in languages if isinstance(x, dict)]
+    if any(not isinstance(x.get("language", ""), str) for x in rows):
+        problems.append("a language row's language is not text")
+    urls = [v for k, v in rec.items() if (k.endswith("_url") or k == "ci_run") and v]
+    urls += [x.get("run_url") for x in rows if x.get("run_url")]
+    return problems + [p for p in map(url_problem, urls) if p]
+
+
+def _key_identity(rec, release) -> dict:
+    """The release a bundle record is evidence for: what its producer states, nested or at the
+    top level. The current release fills only fields left unstated, and only when the rest agrees."""
+    nested = rec["identity"] if isinstance(rec.get("identity"), dict) else {}
+    stated = {k: nested.get(k) or rec.get(k) for k in IDENTITY if nested.get(k) or rec.get(k)}
+    current = identity_of(release) if release else None
+    if current and all(current[k] == v for k, v in stated.items()):
+        return current
+    if not stated:
+        raise SystemExit(f"no release recorded to key this {rec['kind']} evidence by")
+    return {k: stated.get(k) for k in IDENTITY}
+
+
+def add_record(root: Path, pid: str, rec: dict) -> Path:
+    """Store one dated record; an identical retry adds nothing."""
+    rec = {k: v for k, v in rec.items() if not k.startswith("_")}
+    if rec.get("kind") not in KINDS:
+        raise SystemExit(f"unknown evidence kind {rec.get('kind')!r}; expected one of {', '.join(KINDS)}")
+    if _forbidden(rec):
+        raise SystemExit(f"refusing to store credential-shaped fields: {', '.join(sorted(set(_forbidden(rec))))}")
+    try:
+        rec["date"] = utc(rec.get("date") or now())
+    except ValueError as err:
+        raise SystemExit(f"{pid}: {err}") from None
+    if rec["kind"] in BUNDLE:
+        rec["identity"] = _key_identity(rec, current_release(joinable(records(root, pid))))
+    problems = shape_problems(rec)
+    if problems:
+        raise SystemExit(f"{pid}: refusing a malformed {rec['kind']} record: {'; '.join(problems)}")
+    folder = root / "evidence" / pid
+    folder.mkdir(parents=True, exist_ok=True)
+    text = dump(rec)
+    for existing in sorted(folder.glob("*.json")):
+        if existing.read_text() == text:
+            return existing
+    stamp = re.sub(r"[-:]", "", rec["date"])
+    path, n = folder / f"{stamp}-{rec['kind']}.json", 2
+    while path.exists():
+        path, n = folder / f"{stamp}-{rec['kind']}-{n}.json", n + 1
+    path.write_text(text)
+    return path
+
+
+def _git(root: Path, *args) -> str:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, stdout=subprocess.PIPE, text=True).stdout
+
+
+def pending_evidence(root: Path, pid: str, remote: str = "origin") -> list:
+    """The refresh branches on `remote` (`inventory/<pid>-<UTC stamp>`) holding `pid` records
+    this checkout lacks: an evidence PR not merged yet, or a branch pushed without one. Compared
+    by file, so a squash-merged branch counts as merged."""
+    branch = re.compile(rf"refs/heads/(inventory/{re.escape(pid)}-\d{{8}}T\d{{6}}Z)")
+    # CI's checkout is shallow, so its fetch stays shallow; a depth would make a full clone shallow.
+    depth = ["--depth=1"] if _git(root, "rev-parse", "--is-shallow-repository").strip() == "true" else []
+    pending = []
+    for line in _git(root, "ls-remote", "--heads", remote).splitlines():
+        found = branch.fullmatch(line.partition("\t")[2])
+        if not found:
+            continue
+        _git(root, "fetch", "--quiet", "--no-tags", *depth, remote, found.group(0))
+        # Without --no-renames, a record the branch adds can pair with a later one on main and hide.
+        if _git(root, "diff", "--name-only", "--no-renames", "--diff-filter=AM", "HEAD", "FETCH_HEAD", "--",
+                f"evidence/{pid}/").strip():
+            pending.append(found.group(1))
+    return pending
+
+
+def ingest(root: Path, pid: str, source: Path) -> None:
+    for path in sorted(source.glob("*.json")):
+        print(add_record(root, pid, load(path)).relative_to(root))
+    for cbor in sorted(source.glob("cbor/*.hex")):
+        target = root / "evidence" / pid / "cbor" / cbor.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(cbor, target)
+    render(root)
+
+
+# --- journey helpers --------------------------------------------------------
+
+
+def build_spec(root: Path, pid: str, resolve: str = "auto") -> dict:
+    """The journey's input. `resolve` auto resolves again only while the release's latest
+    resolution is not a pass, so a later docs, tools or clients refresh keeps it."""
+    cfg, recs = load(root / "protocols.json"), joinable(records(root, pid))
+    release = current_release(recs)
+    if release is None:
+        raise SystemExit(f"{pid}: no release recorded; the publication pass records one first")
+    ident = identity_of(release)
+    example = root / "expect" / pid / ident["version"]
+    docs, tools = latest(recs, "docs", ident), latest(recs, "tools", ident)
+    passed = latest(recs, "resolution", ident).get("result") == "pass"
+    return {
+        "protocol": pid,
+        "identity": ident,
+        "resolve": resolve == "always" or not passed,
+        "profile": release.get("profile") or ident["network"],
+        "inputs": load(example / "inputs.json") if (example / "inputs.json").exists() else None,
+        "expect": load(example / "expect.json") if (example / "expect.json").exists() else None,
+        "packages": cfg["clients"],
+        "links": {
+            "registry_url": release.get("registry_url"),
+            "source_url": release.get("source_url"),
+            "ci_run": release.get("ci_run"),
+            "docs_url": docs.get("docs_url"),
+            "example_url": docs.get("example_url"),
+            "tools_url": tools.get("tools_url"),
+            "skill_url": tools.get("skill_url"),
+        },
+    }
+
+
+def build_request(tii: dict, spec: dict) -> dict:
+    """The `trp.resolve` call: the operation's TIR, profile arguments, public inputs."""
+    operation, profile_name = spec["identity"]["operation"], spec["profile"]
+    tx = tii.get("transactions", {}).get(operation)
+    profile = tii.get("profiles", {}).get(profile_name)
+    if tx is None or profile is None:
+        raise SystemExit(f"the pulled TII lacks transaction {operation} or profile {profile_name}")
+    if spec.get("inputs") is None:
+        raise SystemExit(f"no public example inputs supplied for version {spec['identity']['version']}")
+    args = dict(profile.get("environment") or {})
+    args.update({k.lower(): v for k, v in (profile.get("parties") or {}).items()})
+    args.update(spec["inputs"])
+    return {"jsonrpc": "2.0", "method": "trp.resolve", "id": "1", "params": {"tir": tx["tir"], "args": args}}
+
+
+def at_path(data, path: str):
+    for part in path.split("."):
+        if isinstance(data, list) and part.isdigit() and int(part) < len(data):
+            data = data[int(part)]
+        elif isinstance(data, dict):
+            data = data.get(part)
+        else:
+            return None
+    return data
+
+
+def _check(effect, expected, actual) -> dict:
+    return {"effect": effect, "expected": expected, "actual": actual, "passed": expected == actual}
+
+
+def _output_checks(want, out) -> list:
+    name = want["effect"]
+    checks = [_check(f"{name}: address", want["address"], out["address"])]
+    if "lovelace" in want:
+        checks.append(_check(f"{name}: lovelace", want["lovelace"], out["lovelace"]))
+    if want.get("lovelace_parts"):
+        parts = want["lovelace_parts"]
+        checks.append(_check(f"{name}: lovelace = {' + '.join(parts)}", sum(parts.values()), out["lovelace"]))
+    if "assets" in want:
+        checks.append(_check(f"{name}: assets", want["assets"], out["assets"]))
+    for d in want.get("datum", []):
+        checks.append(_check(f"{name}: {d['effect']}", d["equals"], at_path(out.get("datum"), d["path"])))
+    return checks
+
+
+def compare(summary: dict, expect: dict) -> list:
+    """Check a decoded transaction against the operation's expected effects."""
+    network = expect["network"]
+    prefix = "addr1" if network == "mainnet" else "addr_test1"
+    elsewhere = sorted({o["address"] for o in summary["outputs"] if not o["address"].startswith(prefix)})
+    checks = [_check("network", network, elsewhere or network)]
+    if summary.get("network_id") is not None:
+        checks.append(_check("body network id", 1 if network == "mainnet" else 0, summary["network_id"]))
+    for field, key, source in (("spends", "ref", "inputs"), ("references", "ref", "reference_inputs"),
+                               ("signers", "key_hash", "required_signers")):
+        for item in expect.get(field, []):
+            checks.append(_check(item["effect"], item[key], item[key] if item[key] in summary[source] else "absent"))
+    for item in expect.get("mint", []):
+        checks.append(_check(item["effect"], item["amount"], summary["mint"].get(item["unit"], 0)))
+    for want in expect.get("outputs", []):
+        candidates = [o for o in summary["outputs"] if o["address"] == want["address"]]
+        if not candidates:
+            checks.append(_check(want["effect"], want["address"], "no output at this address"))
+            continue
+        options = [_output_checks(want, o) for o in candidates]
+        checks += max(options, key=lambda cs: sum(c["passed"] for c in cs))
+    return checks
+
+
+def public_trp(network: str) -> tuple:
+    # The offline journey test points a network at a loopback TRP; live runs never set this.
+    known = dict(PUBLIC_TRP, **json.loads(os.environ.get("INVENTORY_TEST_PUBLIC_TRP") or "{}"))
+    if network not in known:
+        raise SystemExit(f"no public TRP endpoint is known for network {network!r}")
+    url, key = known[network]
+    return url, key
+
+
+def _public(url: str) -> str:
+    """The endpoint as recorded: without user information, query or fragment."""
+    parts = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+
+
+def _reply_problem(reply):
+    """Why a parsed reply is not a JSON-RPC result carrying a transaction, or None."""
+    if not isinstance(reply, dict):
+        return "endpoint error: no JSON-RPC response"
+    error = reply.get("error")
+    if error:
+        if isinstance(error, dict):
+            return f"endpoint error {error.get('code')}: {error.get('message')}"
+        return f"endpoint error: {error}"
+    result = reply.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("tx"), str):
+        return "endpoint error: the reply carries no transaction"
+    return None
+
+
+def resolution_record(spec, endpoint, replies, date, error=None):
+    """The dated resolution record and the transaction hex, or None on error.
+
+    `replies` are the parsed JSON-RPC answers to repeated identical requests,
+    None where an answer was not JSON.
+    """
+    rec = {"kind": "resolution", "date": date, "identity": spec["identity"], "profile": spec["profile"],
+           "endpoint": _public(endpoint) if endpoint else None, "inputs": spec.get("inputs"), "result": "outstanding"}
+    if error:
+        rec["reason"] = error
+        return rec, None
+    problems = [_reply_problem(reply) for reply in replies] or ["endpoint error: no reply"]
+    if any(problems):
+        rec["reason"] = next(p for p in problems if p)
+        return rec, None
+    envelopes = [reply["result"] for reply in replies]
+    tx = envelopes[0]["tx"].strip()
+    try:
+        summary = decode_tx(tx)
+    except ValueError as err:
+        rec["reason"] = f"the endpoint returned no decodable transaction: {err}"
+        return rec, None
+    checks = [_check("hash the endpoint returned", envelopes[0].get("hash"), summary["tx_hash"])]
+    checks += compare(summary, spec["expect"]) if spec.get("expect") else []
+    failed = [c["effect"] for c in checks if not c["passed"]]
+    rec.update(tx_hash=summary["tx_hash"], cbor=f"cbor/{summary['tx_hash']}.hex", cbor_bytes=len(tx) // 2,
+               reproducible=len(envelopes) > 1 and all(e["tx"].strip() == tx for e in envelopes),
+               summary=summary, checks=checks, verdict="mismatch" if failed or not spec.get("expect") else "match")
+    if not spec.get("expect"):
+        rec["reason"] = f"no expected effects supplied for version {spec['identity']['version']}"
+    elif failed:
+        rec["reason"] = "decoded effects differ: " + ", ".join(failed)
+    elif not rec["reproducible"]:
+        rec["reason"] = "a repeated resolution returned different CBOR"
+    else:
+        rec["result"] = "pass"
+    return rec, tx
+
+
+def fetch(url: str) -> dict:
+    """Whether a link answers. Any failure, a malformed URL included, is a dead link."""
+    problem = url_problem(url)
+    if problem:
+        return {"status": problem, "ok": False}
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "tx3-e2e-inventory"})
+        with urllib.request.urlopen(request, timeout=30) as reply:
+            return {"status": reply.status, "ok": 200 <= reply.status < 400}
+    except urllib.error.HTTPError as err:
+        return {"status": err.code, "ok": False}
+    except Exception as err:  # noqa: BLE001 - transport and protocol errors alike
+        return {"status": f"{type(err).__name__}: {getattr(err, 'reason', None) or err}", "ok": False}
+
+
+def registry_record(spec, readme: str, date: str, get=fetch, error=None) -> dict:
+    """Check the release README's bundle references and that every link answers."""
+    if error:
+        return {"kind": "registry", "date": date, "identity": spec["identity"], "result": "outstanding", "reason": error}
+    links = spec["links"]
+    wanted = [("version", spec["identity"]["version"])]
+    wanted += [(f"{language} package reference", marker) for language, marker in spec["packages"].items()]
+    wanted += [(key.replace("_url", " link"), links.get(key)) for key in ("docs_url", "example_url", "tools_url", "skill_url")]
+    checks = [{"effect": effect, "expected": needle, "passed": bool(needle) and needle in readme} for effect, needle in wanted]
+    results = [dict(url=url, **get(url)) for url in sorted({u for u in links.values() if u})]
+    rec = {"kind": "registry", "date": date, "identity": spec["identity"], "checks": checks, "links": results,
+           "links_checked": {k: links.get(k) for k in LINKS}}
+    problems = [f"README lacks {c['effect']}" for c in checks if not c["passed"]]
+    problems += [f"dead link {r['url']} ({r['status']})" for r in results if not r["ok"]]
+    rec["result"] = "outstanding" if problems else "pass"
+    if problems:
+        rec["reason"] = "; ".join(problems)
+    return rec
+
+
+# --- command line -----------------------------------------------------------
+
+
+def _reply(path):
+    try:
+        return load(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _serialized(rec) -> tuple:
+    """The record and its stored text. A decoded summary JSON cannot hold (an integer
+    past Python's digit limit, say) is dropped, and the record stays outstanding."""
+    try:
+        return rec, dump(rec)
+    except (ValueError, TypeError, RecursionError) as err:
+        kept = {k: rec[k] for k in ("kind", "date", "identity", "profile", "endpoint", "inputs", "tx_hash", "cbor") if k in rec}
+        rec = dict(kept, result="outstanding", reason=f"the decoded transaction could not be recorded: {err}")
+        return rec, dump(rec)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=Path, default=DEFAULT_ROOT, help="inventory directory")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("render", help="join evidence into rows and README.md").add_argument("--check", action="store_true")
+    cmd = sub.add_parser("record", help="store one evidence record (JSON file or -)")
+    cmd.add_argument("--protocol", required=True)
+    cmd.add_argument("--kind", choices=KINDS, required=True)
+    cmd.add_argument("file")
+    cmd = sub.add_parser("ingest", help="store a journey's evidence directory and render")
+    cmd.add_argument("--protocol", required=True)
+    cmd.add_argument("dir", type=Path)
+    cmd = sub.add_parser("spec", help="the journey spec for a protocol's current release")
+    cmd.add_argument("--protocol", required=True)
+    cmd.add_argument("--resolve", choices=("auto", "always"), default="auto")
+    sub.add_parser("endpoint", help="a network's public TRP URL and key").add_argument("--network", required=True)
+    cmd = sub.add_parser("pending", help="refresh branches whose records are unmerged; exits 1 if any")
+    cmd.add_argument("--protocol", required=True)
+    cmd.add_argument("--remote", default="origin")
+    cmd = sub.add_parser("request", help="the trp.resolve request for a pulled TII")
+    cmd.add_argument("--spec", required=True)
+    cmd.add_argument("--tii", required=True)
+    for name in ("resolution", "registry"):
+        cmd = sub.add_parser(name, help=f"write the {name} record into --out")
+        cmd.add_argument("--spec", required=True)
+        cmd.add_argument("--out", type=Path, required=True)
+        cmd.add_argument("--date", default=None)
+        cmd.add_argument("--error", help="record this failure as the outstanding reason")
+    sub.choices["resolution"].add_argument("--endpoint")
+    sub.choices["resolution"].add_argument("--response", action="append", default=[])
+    sub.choices["registry"].add_argument("--readme")
+    args = parser.parse_args(argv)
+
+    if getattr(args, "protocol", None) is not None:
+        known = [p["id"] for p in load(args.root / "protocols.json")["protocols"]]
+        if args.protocol not in known:
+            raise SystemExit(f"unknown protocol {args.protocol!r}; expected one of {', '.join(known)}")
+    if args.command == "render":
+        return render(args.root, args.check)
+    if args.command == "record":
+        rec = json.loads(sys.stdin.read() if args.file == "-" else Path(args.file).read_text())
+        rec["kind"] = args.kind
+        print(add_record(args.root, args.protocol, rec).relative_to(args.root))
+        return render(args.root)
+    if args.command == "ingest":
+        ingest(args.root, args.protocol, args.dir)
+        return 0
+    if args.command == "spec":
+        print(dump(build_spec(args.root, args.protocol, args.resolve)), end="")
+        return 0
+    if args.command == "endpoint":
+        print(" ".join(public_trp(args.network)))
+        return 0
+    if args.command == "pending":
+        branches = pending_evidence(args.root, args.protocol, args.remote)
+        for name in branches:
+            print(f"{name} holds {args.protocol} evidence this checkout lacks; merge its PR, "
+                  "or close it and delete the branch, before refreshing again", file=sys.stderr)
+        return 1 if branches else 0
+    if args.command == "request":
+        print(dump(build_request(load(args.tii), load(args.spec))), end="")
+        return 0
+    spec, date = load(args.spec), args.date or now()
+    args.out.mkdir(parents=True, exist_ok=True)
+    tx = None
+    try:
+        if args.command == "resolution":
+            rec, tx = resolution_record(spec, args.endpoint, [_reply(path) for path in args.response], date, args.error)
+        else:
+            readme = Path(args.readme or "")
+            rec = registry_record(spec, readme.read_text() if readme.is_file() else "", date, error=args.error)
+    except Exception as err:  # noqa: BLE001 - every failure still leaves an outstanding record
+        reason = f"the {args.command} check failed: {type(err).__name__}: {err}"
+        rec = (resolution_record(spec, args.endpoint, [], date, reason)[0] if args.command == "resolution"
+               else registry_record(spec, "", date, error=reason))
+    rec, text = _serialized(rec)
+    if tx and rec.get("cbor"):
+        (args.out / "cbor").mkdir(exist_ok=True)
+        (args.out / rec["cbor"]).write_text(tx + "\n")
+    (args.out / f"{rec['kind']}.json").write_text(text)
+    print(f"{rec['kind']}: {rec['result']}" + (f" ({rec['reason']})" if rec.get("reason") else ""))
+    return 0 if rec["result"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

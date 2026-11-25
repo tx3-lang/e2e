@@ -1,0 +1,141 @@
+{
+  "cbor": "cbor/c4955da8b6a2fb9747db739d9fd1112f2df3189e436f7d4ce963334d03846525.hex",
+  "cbor_bytes": 307,
+  "checks": [
+    {
+      "actual": "c4955da8b6a2fb9747db739d9fd1112f2df3189e436f7d4ce963334d03846525",
+      "effect": "hash the endpoint returned",
+      "expected": "c4955da8b6a2fb9747db739d9fd1112f2df3189e436f7d4ce963334d03846525",
+      "passed": true
+    },
+    {
+      "actual": "preprod",
+      "effect": "network",
+      "expected": "preprod",
+      "passed": true
+    },
+    {
+      "actual": "addr_test1zzs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgwrc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0psadsduu",
+      "effect": "order output: address",
+      "expected": "addr_test1zzs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgwrc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0psadsduu",
+      "passed": true
+    },
+    {
+      "actual": 14000000,
+      "effect": "order output: lovelace = offered + batcher fee + deposit",
+      "expected": 14000000,
+      "passed": true
+    },
+    {
+      "actual": {},
+      "effect": "order output: assets",
+      "expected": {},
+      "passed": true
+    },
+    {
+      "actual": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "effect": "order output: receiver",
+      "expected": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "passed": true
+    },
+    {
+      "actual": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d44c50",
+      "effect": "order output: pool identity",
+      "expected": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d44c50",
+      "passed": true
+    },
+    {
+      "actual": 0,
+      "effect": "order output: asset direction",
+      "expected": 0,
+      "passed": true
+    },
+    {
+      "actual": 4321000,
+      "effect": "order output: minimum received",
+      "expected": 4321000,
+      "passed": true
+    }
+  ],
+  "date": "2026-11-20T12:00:00Z",
+  "endpoint": "https://trp.example.test",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "lending",
+    "network": "preprod",
+    "operation": "supply",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "inputs": {
+    "offered": 10000000,
+    "sender": "addr_test1example"
+  },
+  "kind": "resolution",
+  "profile": "preprod",
+  "reproducible": true,
+  "result": "pass",
+  "summary": {
+    "fee": 180000,
+    "inputs": [
+      "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5#0"
+    ],
+    "mint": {},
+    "network_id": null,
+    "outputs": [
+      {
+        "address": "addr_test1zzs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgdp5xs6rgwrc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0psadsduu",
+        "assets": {},
+        "datum": {
+          "constructor": 0,
+          "fields": [
+            {
+              "constructor": 0,
+              "fields": [
+                {
+                  "bytes": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+                }
+              ]
+            },
+            {
+              "constructor": 0,
+              "fields": [
+                {
+                  "bytes": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+                }
+              ]
+            },
+            {
+              "bytes": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d44c50"
+            },
+            {
+              "constructor": 0,
+              "fields": []
+            },
+            {
+              "int": 4321000
+            },
+            {
+              "int": 2000000
+            }
+          ]
+        },
+        "lovelace": 14000000
+      },
+      {
+        "address": "addr_test1qzet9v4jk2et9v4jk2et9v4jk2et9v4jk2et9v4jk2et9vkrc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0pu8s7rc0pszmdlqt",
+        "assets": {},
+        "lovelace": 30000000
+      }
+    ],
+    "reference_inputs": [],
+    "required_signers": [],
+    "ttl": null,
+    "tx_hash": "c4955da8b6a2fb9747db739d9fd1112f2df3189e436f7d4ce963334d03846525",
+    "validity_start": null
+  },
+  "tx_hash": "c4955da8b6a2fb9747db739d9fd1112f2df3189e436f7d4ce963334d03846525",
+  "verdict": "match"
+}

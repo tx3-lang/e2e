@@ -1,0 +1,40 @@
+{
+  "coordinate": "open-tx3/liqwid-v2",
+  "evidence": {},
+  "history": [],
+  "id": "liqwid-v2",
+  "identity": null,
+  "missing": [
+    "release: no publication-pass record yet (version, digests, source tag, CI run, sign-off)",
+    "reconciliation: identity not yet checked against existing source, the historical catalog and every live registry namespace",
+    "resolution: waits on the release",
+    "clients: waits on the release",
+    "docs: waits on the release",
+    "tools: waits on the release",
+    "registry: waits on the release"
+  ],
+  "network": "preview",
+  "operation": "supply_ada",
+  "protocol": "Liqwid V2",
+  "release": null,
+  "selection": {
+    "active wallets": {
+      "gap": "no public active-wallet count found at the 2026-11-24 screening"
+    },
+    "activity": {
+      "as_of": "2026-11-15",
+      "source": "https://cardano.org/apps/leaderboard/",
+      "value": "3,188 transactions (whole dapp) in the 30 days to 2026-11-15"
+    },
+    "tvl": {
+      "as_of": "DefiLlama snapshots of 2026-11-23 to 2026-11-24",
+      "source": "https://defillama.com/chain/cardano",
+      "value": "about $6.93M"
+    }
+  },
+  "sign_off": null,
+  "status": "outstanding",
+  "team": "Liqwid",
+  "test_date": null,
+  "within_period": null
+}

@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-20T14:00:00Z",
+  "docs_url": "https://example.test/swap/docs",
+  "example_url": "https://example.test/swap/docs/example",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "swap",
+    "network": "preprod",
+    "operation": "place_order",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "docs",
+  "result": "pass"
+}

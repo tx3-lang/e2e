@@ -1,0 +1,115 @@
+{
+  "checks": [
+    {
+      "effect": "version",
+      "expected": "0.1.0",
+      "passed": true
+    },
+    {
+      "effect": "rust package reference",
+      "expected": "crates.io/crates/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "typescript package reference",
+      "expected": "npmjs.com/package/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "python package reference",
+      "expected": "pypi.org/project/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "go package reference",
+      "expected": "github.com/tx3-lang/go-sdk",
+      "passed": true
+    },
+    {
+      "effect": "java package reference",
+      "expected": "land.tx3:tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "swift package reference",
+      "expected": "github.com/tx3-lang/swift-sdk",
+      "passed": true
+    },
+    {
+      "effect": "docs link",
+      "expected": "https://example.test/lending/docs",
+      "passed": true
+    },
+    {
+      "effect": "example link",
+      "expected": "https://example.test/lending/docs/example",
+      "passed": true
+    },
+    {
+      "effect": "tools link",
+      "expected": "https://example.test/lending/tools",
+      "passed": true
+    },
+    {
+      "effect": "skill link",
+      "expected": "https://example.test/lending/skill",
+      "passed": true
+    }
+  ],
+  "date": "2026-11-20T13:00:00Z",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "lending",
+    "network": "preprod",
+    "operation": "supply",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "registry",
+  "links": [
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/actions/1"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/docs"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/docs/example"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/registry"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/skill"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/tools"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/lending/tree/v0.1.0"
+    }
+  ],
+  "links_checked": {
+    "docs_url": "https://example.test/lending/docs",
+    "example_url": "https://example.test/lending/docs/example",
+    "skill_url": "https://example.test/lending/skill",
+    "tools_url": "https://example.test/lending/tools"
+  },
+  "result": "pass"
+}

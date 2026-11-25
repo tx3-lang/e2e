@@ -1,0 +1,81 @@
+name: Inventory
+
+# Offline checks of the protocol onboarding inventory: the decoder, the effect
+# comparison, the join, the link checker against a loopback server, journey 13
+# through run.sh with a fake trix and a loopback TRP, and that the committed
+# rows and README match their evidence. No network access: live evidence comes
+# from inventory-refresh.yml. On main, a rendering that no longer matches its
+# evidence gets a correction PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'inventory/**'
+      - 'journeys/13-public-resolution/**'
+      - 'run.sh'
+      - 'lib/**'
+      - '.github/workflows/inventory.yml'
+      - '.github/workflows/inventory-refresh.yml'
+  pull_request:
+    paths:
+      - 'inventory/**'
+      - 'journeys/13-public-resolution/**'
+      - 'run.sh'
+      - 'lib/**'
+      - '.github/workflows/inventory.yml'
+      - '.github/workflows/inventory-refresh.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: inventory (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decoder, comparison, join, refresh and journey tests
+        env:
+          INVENTORY_JOURNEY_REQUIRED: '1'
+        run: python3 -m unittest discover -s inventory/tests -t inventory/tests -v
+      - name: Rendered inventory matches its evidence
+        run: python3 inventory/lib/inventory.py render --check
+      - name: Journey script parses
+        run: bash -n journeys/13-public-resolution/journey.sh
+
+  # Two evidence PRs can each pass review and still leave main's README behind
+  # its evidence; this job re-renders and proposes the correction. It runs only
+  # this repository's own code.
+  repair:
+    name: repair main's rendering
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: inventory-repair
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open a correction PR when the rendering is out of date
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if python3 inventory/lib/inventory.py render --check; then
+            exit 0
+          fi
+          python3 inventory/lib/inventory.py render
+          short="${GITHUB_SHA::12}"
+          branch="inventory/render-${short}"
+          title="chore(inventory): re-render after ${short}"
+          git switch -c "${branch}"
+          git add -- inventory/README.md inventory/rows
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "${title}" -m "main's committed rendering no longer matched its evidence."
+          git push origin "${branch}"
+          gh pr create --base main --head "${branch}" --title "${title}" \
+            --body "main at ${GITHUB_SHA} keeps a README or rows that \`render --check\` rejects, usually after two evidence PRs merged cleanly. This PR is the rendering of main's evidence; review and merge it."

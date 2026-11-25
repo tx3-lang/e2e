@@ -1,0 +1,17 @@
+{
+  "groups": [
+    {
+      "entries": [
+        {
+          "coordinate": "open-tx3/transfer",
+          "protocol": "Transfer",
+          "version": "0.1.0"
+        }
+      ],
+      "id": "earlier",
+      "title": "Earlier"
+    }
+  ],
+  "registry_page": "https://tx3.land/protocol/",
+  "summary": "Fixture baseline."
+}

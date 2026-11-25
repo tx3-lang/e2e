@@ -1,0 +1,115 @@
+{
+  "checks": [
+    {
+      "effect": "version",
+      "expected": "0.1.0",
+      "passed": true
+    },
+    {
+      "effect": "rust package reference",
+      "expected": "crates.io/crates/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "typescript package reference",
+      "expected": "npmjs.com/package/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "python package reference",
+      "expected": "pypi.org/project/tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "go package reference",
+      "expected": "github.com/tx3-lang/go-sdk",
+      "passed": true
+    },
+    {
+      "effect": "java package reference",
+      "expected": "land.tx3:tx3-sdk",
+      "passed": true
+    },
+    {
+      "effect": "swift package reference",
+      "expected": "github.com/tx3-lang/swift-sdk",
+      "passed": true
+    },
+    {
+      "effect": "docs link",
+      "expected": "https://example.test/swap/docs",
+      "passed": true
+    },
+    {
+      "effect": "example link",
+      "expected": "https://example.test/swap/docs/example",
+      "passed": true
+    },
+    {
+      "effect": "tools link",
+      "expected": "https://example.test/swap/tools",
+      "passed": true
+    },
+    {
+      "effect": "skill link",
+      "expected": "https://example.test/swap/skill",
+      "passed": true
+    }
+  ],
+  "date": "2026-11-20T13:00:00Z",
+  "identity": {
+    "git_sha": "3333333333333333333333333333333333333333",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "name": "swap",
+    "network": "preprod",
+    "operation": "place_order",
+    "scope": "example",
+    "tii_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "version": "0.1.0"
+  },
+  "kind": "registry",
+  "links": [
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/actions/1"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/docs"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/docs/example"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/registry"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/skill"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/tools"
+    },
+    {
+      "ok": true,
+      "status": 200,
+      "url": "https://example.test/swap/tree/v0.1.0"
+    }
+  ],
+  "links_checked": {
+    "docs_url": "https://example.test/swap/docs",
+    "example_url": "https://example.test/swap/docs/example",
+    "skill_url": "https://example.test/swap/skill",
+    "tools_url": "https://example.test/swap/tools"
+  },
+  "result": "pass"
+}

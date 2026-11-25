@@ -1,0 +1,70 @@
+{
+  "title": "Protocol onboarding inventory",
+  "summary": "Which onboarded Cardano protocol has a complete Tx3 bundle. A complete row has a published interface pulled by version and digest, a decoded unsigned resolution on its network's public TRP, six typed clients, docs with a working example, and versioned MCP tools with a matching Skill, all for the same release. A row stays outstanding, with each missing item named, until every item is present.",
+  "milestone": {
+    "name": "Milestone 1.2",
+    "period": {"start": "2026-10-01", "end": "2026-11-30"}
+  },
+  "clients": {
+    "rust": "crates.io/crates/tx3-sdk",
+    "typescript": "npmjs.com/package/tx3-sdk",
+    "python": "pypi.org/project/tx3-sdk",
+    "go": "github.com/tx3-lang/go-sdk",
+    "java": "land.tx3:tx3-sdk",
+    "swift": "github.com/tx3-lang/swift-sdk"
+  },
+  "protocols": [
+    {
+      "id": "minswap-v2",
+      "protocol": "Minswap V2",
+      "team": "Minswap",
+      "operation": "place_exact_in_order",
+      "network": "preprod",
+      "coordinate": "open-tx3/minswap-v2",
+      "selection": {
+        "activity": {"value": "162,169 transactions (whole dapp) in the 30 days to 2026-11-15", "as_of": "2026-11-15", "source": "https://cardano.org/apps/leaderboard/"},
+        "tvl": {"value": "about $11.7M", "as_of": "DefiLlama snapshots of 2026-11-23 to 2026-11-24", "source": "https://defillama.com/chain/cardano"},
+        "active wallets": {"value": "about 6,400 (Minswap V2, rolling count)", "as_of": "read by 2026-11-24; the source shows no snapshot date", "source": "https://poolflow.net/markets"}
+      }
+    },
+    {
+      "id": "liqwid-v2",
+      "protocol": "Liqwid V2",
+      "team": "Liqwid",
+      "operation": "supply_ada",
+      "network": "preview",
+      "coordinate": "open-tx3/liqwid-v2",
+      "selection": {
+        "activity": {"value": "3,188 transactions (whole dapp) in the 30 days to 2026-11-15", "as_of": "2026-11-15", "source": "https://cardano.org/apps/leaderboard/"},
+        "tvl": {"value": "about $6.93M", "as_of": "DefiLlama snapshots of 2026-11-23 to 2026-11-24", "source": "https://defillama.com/chain/cardano"},
+        "active wallets": {"gap": "no public active-wallet count found at the 2026-11-24 screening"}
+      }
+    },
+    {
+      "id": "wingriders-v2",
+      "protocol": "WingRiders V2",
+      "team": "WingRiders",
+      "operation": "place_swap_request",
+      "network": "mainnet",
+      "coordinate": "open-tx3/wingriders-v2",
+      "selection": {
+        "activity": {"value": "22,179 transactions (whole dapp) in the 30 days to 2026-11-15", "as_of": "2026-11-15", "source": "https://cardano.org/apps/leaderboard/"},
+        "tvl": {"value": "about $0.71M", "as_of": "DefiLlama snapshots of 2026-11-23 to 2026-11-24", "source": "https://defillama.com/chain/cardano"},
+        "active wallets": {"value": "about 2,000 (WingRiders V2, rolling count)", "as_of": "read by 2026-11-24; the source shows no snapshot date", "source": "https://poolflow.net/markets"}
+      }
+    },
+    {
+      "id": "dano-clmm",
+      "protocol": "Dano Finance",
+      "team": "Dano Finance (Danogo)",
+      "operation": "swap_single_pool",
+      "network": "preprod",
+      "coordinate": "open-tx3/dano-clmm",
+      "selection": {
+        "activity": {"value": "28,350 transactions (whole dapp) in the 30 days to 2026-11-15", "as_of": "2026-11-15", "source": "https://cardano.org/apps/leaderboard/"},
+        "tvl": {"gap": "no DefiLlama figure recorded in the 2026-11-23 to 2026-11-24 snapshots"},
+        "active wallets": {"gap": "no public active-wallet count found at the 2026-11-24 screening"}
+      }
+    }
+  ]
+}
