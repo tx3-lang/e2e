@@ -280,6 +280,11 @@ def build_row(cfg, baseline, proto, stored) -> dict:
     test_date = evidence.get("resolution", {}).get("date")
     period = cfg["milestone"]["period"]
     conflicts = conflicted_versions(recs)
+    shown = {k: release.get(k) for k in RELEASE_FIELDS} if release else None
+    if shown:
+        # A correction keeps the version's first release date, the date it was published.
+        shown["date"] = next(r for r in recs if r.get("kind") == "release"
+                             and identity_of(r)["version"] == ident["version"]).get("date")
     return {
         "id": proto["id"],
         "protocol": proto["protocol"],
@@ -290,7 +295,7 @@ def build_row(cfg, baseline, proto, stored) -> dict:
         "status": "outstanding" if missing else "complete",
         "missing": missing,
         "identity": ident,
-        "release": {k: release.get(k) for k in RELEASE_FIELDS} if release else None,
+        "release": shown,
         "sign_off": (release.get("sign_off") or {}).get("status") if release else None,
         "evidence": evidence,
         "test_date": test_date,

@@ -341,6 +341,10 @@ class Shapes(Records.__base__):
         row = inventory.load(self.root / "rows" / "swap.json")
         self.assertEqual((row["identity"], row["status"], row["missing"]), (identity(version="0.2.0"), "complete", []))
         self.assertFalse(inventory.build_spec(self.root, "swap")["resolve"])
+        self.assertEqual(row["release"]["date"], "2026-11-21T09:00:00Z", "a correction keeps the first release date")
+        readme = (self.root / "README.md").read_text()
+        self.assertIn("| date | 2026-11-21T09:00:00Z |", readme)
+        self.assertNotIn("| date | 2026-11-22T09:00:00Z |", readme)
 
     @unittest.skipUnless(shutil.which("git"), "needs git merge-file")
     def test_two_completions_conflict_instead_of_merging_a_wrong_count(self):
@@ -472,9 +476,13 @@ class RefreshWorkflow(unittest.TestCase):
         later = where("inventory.py spec") + where("journey: 13-public-resolution")
         self.assertEqual(len(later), 2)
         self.assertLess(guard[0], min(later), "the guard runs before the spec and the journey")
-        keys = steps[guard[0]][0]
+        keys, text = steps[guard[0]]
         self.assertEqual(keys, {"name": keys.get("name"), "run": self.GUARD},
                          "no condition, continue-on-error or `||` lets the run go on past a failed guard")
+        # YAML folds an indented line into the plain `run:` scalar, so nothing may follow it.
+        self.assertEqual([line.split(":")[0].strip() for line in text.splitlines() if line.strip()],
+                         ["- name", "run"], "no continuation line extends the guard's command")
+        self.assertNotIn("||", text)
         self.assertEqual([k for k, _ in steps[guard[0]:] if "if" in k], [],
                          "no later step runs after a failure")
 

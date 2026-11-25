@@ -118,6 +118,8 @@ class Outstanding(unittest.TestCase):
         r = row(records + [corrected])
         self.assertEqual((r["identity"], r["status"], r["missing"]), (identity(), "complete", []))
         self.assertEqual(set(r["evidence"]), set(inventory.BUNDLE))
+        self.assertEqual(r["release"]["date"], records[0]["date"], "a correction keeps the first release date")
+        self.assertEqual(r["release"]["source_tag"], corrected["source_tag"])
 
     def test_a_conflicting_correction_does_not_carry_the_evidence(self):
         records = complete_records(dict(identity(), git_sha=None))
