@@ -13,8 +13,9 @@
 #          --operation <tx> --args <input.json> --out <record.json>
 #          [--network <name>] [--registry <url>] [--run-url <url>]
 #          [--workdir <dir>]
-# Env: TRIX (trix binary, default `trix`), TX3_TX3C_PATH (tx3c it uses),
-# PYTHON (interpreter for the Python consumer, default `python3`).
+# Env: TRIX (trix binary, default `trix`), TX3_TX3C_PATH or TX3_HOME (the
+# tx3c trix runs, resolved as trix does), PYTHON (interpreter for the Python
+# consumer, default `python3`).
 
 set -uo pipefail
 
@@ -44,13 +45,15 @@ while [[ $# -gt 0 ]]; do
   shift 2
 done
 [[ -n "${OUT}" ]] || die "--out is required"
+mkdir -p "$(dirname "${OUT}")" || die "cannot create the directory of --out ${OUT}"
 OUT="$(cd "$(dirname "${OUT}")" && pwd)/$(basename "${OUT}")"
 NETWORK="${NETWORK:-${PROFILE}}"
 SCOPE="${REF%%/*}"; rest="${REF#*/}"; NAME="${rest%%:*}"; VERSION="${rest#*:}"
 
-RUNTIME_PACKAGE="" RUNTIME_VERSION="" STAGE="argument check" MOCK_PID="" OWN_WORKDIR=""
+RUNTIME_PACKAGE="" RUNTIME_VERSION="" RELEASE_DATE="" STAGE="argument check" MOCK_PID="" OWN_WORKDIR=""
 TRIX_VERSION="$("${TRIX}" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
-TX3C="${TX3_TX3C_PATH:-$(command -v tx3c 2>/dev/null || echo "${HOME}/.tx3/default/bin/tx3c")}"
+# The tx3c trix runs: TX3_TX3C_PATH when set, else the default channel under TX3_HOME.
+if [[ -n "${TX3_TX3C_PATH+set}" ]]; then TX3C="${TX3_TX3C_PATH}"; else TX3C="${TX3_HOME:-${HOME}/.tx3}/default/bin/tx3c"; fi
 TX3C_VERSION="$("${TX3C}" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
 
 # The record is written on every exit, so a failure at any stage stays visible.
@@ -61,10 +64,12 @@ write_record() {
   if [[ "${rc}" -ne 0 ]]; then result="fail"; reason="${STAGE} failed${DETAIL:+: ${DETAIL}}"; fi
   python3 "${HELPER}" row --scope "${SCOPE}" --name "${NAME}" --version "${VERSION}" \
     --manifest-digest "${MANIFEST_DIGEST}" --tii-digest "${TII_DIGEST}" --git-sha "${GIT_SHA}" \
+    --release-date "${RELEASE_DATE}" \
     --network "${NETWORK}" --operation "${OPERATION}" --language "${LANG_ID}" \
     --runtime-package "${RUNTIME_PACKAGE}" --runtime-version "${RUNTIME_VERSION}" \
     --tx3c-version "${TX3C_VERSION}" --trix-version "${TRIX_VERSION}" --run-url "${RUN_URL}" \
-    --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --result "${result}" --reason "${reason}" --out "${OUT}"
+    --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --result "${result}" --reason "${reason}" --out "${OUT}" \
+    || { err "${LANG_ID}: could not write the record to ${OUT}"; exit 1; }
   [[ "${result}" == "pass" ]] && ok "${LANG_ID}: record passed" || err "${LANG_ID}: ${reason}"
   exit "${rc}"
 }
@@ -84,6 +89,8 @@ esac
 
 STAGE="host toolchain check"
 for tool in ${TOOLS}; do command -v "${tool}" >/dev/null 2>&1 || die "${tool} not found"; done
+[[ -n "${TRIX_VERSION}" ]] || die "cannot read a version from trix at ${TRIX}"
+[[ -n "${TX3C_VERSION}" ]] || die "cannot read a version from tx3c at ${TX3C}"
 
 # A workdir the caller names is kept for inspection; one made here is removed.
 [[ -n "${WORKDIR}" ]] || { WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/client-check.XXXXXX")"; OWN_WORKDIR="${WORKDIR}"; }
@@ -111,6 +118,8 @@ grep -qF "digest = \"${MANIFEST_DIGEST}\"" trix.toml || die "trix.toml pin does 
   || die "TII digest sha256:$(sha256_of "${CACHE}/main.tii") does not match expected ${TII_DIGEST}"
 [[ "$(pulled commit_sha)" == "${GIT_SHA}" ]] \
   || die "release source commit '$(pulled commit_sha)' does not match expected ${GIT_SHA}"
+RELEASE_DATE="$(python3 -c 'import datetime as d,sys; print(d.datetime.fromtimestamp(int(sys.argv[1]), d.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$(pulled published_date)" 2>/dev/null)" \
+  || die "release carries no published date"
 ok "manifest, TII and source commit match the release identity"
 TII="${PWD}/${CACHE}/main.tii"
 
@@ -153,7 +162,7 @@ case "${LANG_ID}" in
     EXEC=("${APP}/.venv/bin/python" "${APP}/main.py") ;;
   go)
     MODULE="$(sed -n 's/^module //p' "${GEN}/go.mod")"
-    printf 'module client-check-consumer\n\ngo %s\n\nrequire %s v0.0.0\n\nreplace %s => %s\n' \
+    printf 'module client-check-consumer\n\ngo %s\n\nrequire %s v0.0.0\n\nreplace %s => "%s"\n' \
       "$(sed -n 's/^go //p' "${GEN}/go.mod")" "${MODULE}" "${MODULE}" "${GEN}" > "${APP}/go.mod"
     render --module "${MODULE}" --out "${APP}/main.go"
     run "go mod tidy — public runtime" sh -c "cd '${APP}' && go mod tidy"
@@ -195,6 +204,9 @@ PY
   swift)
     MODULE="$(sed -n 's/^ *name: "\(.*\)",$/\1/p' "${GEN}/Package.swift" | head -n1)"
     mkdir -p "${APP}/Sources/Consumer"
+    # BigInt is a dependency only when the interface has integers (tx3c adds it then).
+    BIGINT="$(dep_line 'github.com/attaswift/BigInt' "${GEN}/Package.swift")"
+    BIGINT_PRODUCT='.product(name: "BigInt", package: "BigInt"),'
     cat > "${APP}/Package.swift" <<EOF
 // swift-tools-version: 6.1
 import PackageDescription
@@ -204,19 +216,19 @@ let package = Package(
   platforms: [.macOS(.v14)],
   dependencies: [
     .package(path: "${GEN}"),
-    $(dep_line 'github.com/tx3-lang/swift-sdk' "${GEN}/Package.swift"),
-    $(dep_line 'github.com/attaswift/BigInt' "${GEN}/Package.swift"),
+    $(dep_line 'github.com/tx3-lang/swift-sdk' "${GEN}/Package.swift"),${BIGINT:+
+    ${BIGINT},}
   ],
   targets: [
     .executableTarget(name: "Consumer", dependencies: [
       .product(name: "${MODULE}", package: "${NAME}"),
-      .product(name: "Tx3SDK", package: "swift-sdk"),
-      .product(name: "BigInt", package: "BigInt"),
+      .product(name: "Tx3SDK", package: "swift-sdk"),${BIGINT:+
+      ${BIGINT_PRODUCT}}
     ])
   ]
 )
 EOF
-    render --out "${APP}/Sources/Consumer/main.swift"
+    render ${BIGINT:+--bigint} --out "${APP}/Sources/Consumer/main.swift"
     run "swift build — generated client and consumer" swift build --package-path "${APP}" -c debug
     RUNTIME_PACKAGE="github.com/tx3-lang/swift-sdk"
     RUNTIME_VERSION="$(python3 -c 'import json,sys; print(next(p["state"].get("version","") for p in json.load(open(sys.argv[1]))["pins"] if p["identity"] == "swift-sdk"))' "${APP}/Package.resolved")"

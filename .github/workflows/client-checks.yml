@@ -5,7 +5,9 @@ name: Client checks
 # release (workflow_dispatch, or workflow_call from the public inventory) it
 # checks that release; on pull requests and pushes it checks the controlled
 # fixture release and runs the harness tests in journey 13. A fixture pass
-# proves the harness only. See journeys/13-client-checks/README.md.
+# proves the harness only. Artifact names carry a key derived from the call's
+# inputs, so one caller run can check several releases. See
+# journeys/13-client-checks/README.md.
 
 on:
   pull_request:
@@ -109,10 +111,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: client-checks-${{ github.ref }}-${{ inputs.release || 'fixture' }}
-  cancel-in-progress: false
-
 env:
   RELEASE: ${{ inputs.release }}
   MANIFEST_DIGEST: ${{ inputs.manifest_digest }}
@@ -156,6 +154,13 @@ jobs:
         with:
           repository: ${{ inputs.harness_ref && 'tx3-lang/e2e' || github.repository }}
           ref: ${{ inputs.harness_ref }}
+          persist-credentials: false
+      - name: Derive the call key
+        shell: bash
+        run: |
+          key="$(python3 journeys/13-client-checks/client_check.py call-key \
+            "${RELEASE}" "${OPERATION}" "${NETWORK}" "${PROFILE}" "${ARGS_JSON}" "${CHANNEL}")"
+          echo "CALL_KEY=${key}" >> "${GITHUB_ENV}"
       - if: matrix.language == 'python'
         uses: actions/setup-python@v5
         with:
@@ -184,6 +189,8 @@ jobs:
           channel: ${{ inputs.channel || 'stable' }}
           warmup-only: 'true'
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A release run executes code the release supplies, so it never writes the shared cache.
+          save-cache: ${{ inputs.release && 'false' || 'true' }}
       - name: Check the ${{ matrix.language }} client
         shell: bash
         env:
@@ -195,7 +202,13 @@ jobs:
           common=(--lang "${LANGUAGE}" --run-url "${RUN_URL}" --workdir "${RUNNER_TEMP}/work"
                   --out "${RUNNER_TEMP}/record/${LANGUAGE}.json")
           if [[ -z "${RELEASE}" ]]; then
-            exec bash journeys/13-client-checks/fixture.sh --operation settle "${common[@]}"
+            rc=0
+            bash journeys/13-client-checks/fixture.sh --operation settle "${common[@]}" || rc=$?
+            # Harness check only, not a record: an interface with no integer parameter.
+            bash journeys/13-client-checks/fixture.sh --fixture fixture-noint --operation transfer \
+              --lang "${LANGUAGE}" --workdir "${RUNNER_TEMP}/work-noint" \
+              --out "${RUNNER_TEMP}/noint/${LANGUAGE}.json" || rc=$?
+            exit "${rc}"
           fi
           printf '%s' "${ARGS_JSON}" > "${RUNNER_TEMP}/args.json"
           exec bash journeys/13-client-checks/check.sh "${common[@]}" --ref "${RELEASE}" \
@@ -206,21 +219,22 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: client-check-record-${{ matrix.language }}
+          name: client-check-record-${{ env.CALL_KEY }}-${{ matrix.language }}
           path: ${{ runner.temp }}/record
           if-no-files-found: ignore
       - name: Upload the consumer workdir on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: client-check-work-${{ matrix.language }}
+          name: client-check-work-${{ env.CALL_KEY }}-${{ matrix.language }}
           path: |
             ${{ runner.temp }}/work
-            !${{ runner.temp }}/work/**/node_modules
-            !${{ runner.temp }}/work/**/target
-            !${{ runner.temp }}/work/**/.build
-            !${{ runner.temp }}/work/**/.venv
-            !${{ runner.temp }}/work/m2
+            ${{ runner.temp }}/work-noint
+            !${{ runner.temp }}/work*/**/node_modules
+            !${{ runner.temp }}/work*/**/target
+            !${{ runner.temp }}/work*/**/.build
+            !${{ runner.temp }}/work*/**/.venv
+            !${{ runner.temp }}/work*/m2
           if-no-files-found: ignore
           retention-days: 7
 
@@ -236,28 +250,34 @@ jobs:
         with:
           repository: ${{ inputs.harness_ref && 'tx3-lang/e2e' || github.repository }}
           ref: ${{ inputs.harness_ref }}
+          persist-credentials: false
+      - name: Derive the call key
+        shell: bash
+        run: |
+          key="$(python3 journeys/13-client-checks/client_check.py call-key \
+            "${RELEASE}" "${OPERATION}" "${NETWORK}" "${PROFILE}" "${ARGS_JSON}" "${CHANNEL}")"
+          echo "CALL_KEY=${key}" >> "${GITHUB_ENV}"
+      # One directory per language artifact; combine reads only <language>.json from each.
       - uses: actions/download-artifact@v4
         with:
-          pattern: client-check-record-*
-          merge-multiple: true
+          pattern: client-check-record-${{ env.CALL_KEY }}-*
           path: records
       - name: Combine the language records
         id: combine
         shell: bash
         run: |
           shopt -s nullglob
-          records=(records/*.json)
-          identity=(--scope "${RELEASE%%/*}" --network "${NETWORK}" --operation "${OPERATION}"
+          root="records/client-check-record-${CALL_KEY}-"
+          identity=(--release "${RELEASE}" --network "${NETWORK}" --profile "${PROFILE}" --operation "${OPERATION}"
                     --manifest-digest "${MANIFEST_DIGEST}" --tii-digest "${TII_DIGEST}" --git-sha "${GIT_SHA}")
-          rest="${RELEASE#*/}"
-          identity+=(--name "${rest%%:*}" --version "${rest#*:}")
           if [[ -z "${RELEASE}" ]]; then
+            records=("${root}"*/*.json)
             identity=(--identity-from "${records[0]:-records/none.json}")
           fi
           rc=0
           python3 journeys/13-client-checks/client_check.py combine "${identity[@]}" \
             --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --run-url "${RUN_URL}" --out result.json \
-            "${records[@]}" || rc=$?
+            --artifact-root "${root}" || rc=$?
           echo "result=$(python3 -c 'import json; print(json.dumps(json.load(open("result.json"))))')" >> "${GITHUB_OUTPUT}"
           python3 journeys/13-client-checks/client_check.py summary result.json >> "${GITHUB_STEP_SUMMARY}"
           exit "${rc}"
@@ -265,7 +285,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: client-check-result
+          name: client-check-result-${{ env.CALL_KEY }}
           path: |
             result.json
             records

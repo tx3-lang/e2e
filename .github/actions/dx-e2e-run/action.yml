@@ -17,6 +17,10 @@ inputs:
     description: "Token for tx3up's GitHub downloads (raises the rate limit)."
     required: false
     default: ''
+  save-cache:
+    description: "Save the channel cache on a miss. Pass 'false' in jobs that run untrusted code, so they only restore it."
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -36,10 +40,18 @@ runs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
     - name: Cache channel toolchain
+      if: inputs.save-cache != 'false'
       uses: actions/cache@v4
       with:
         path: ~/.tx3/${{ inputs.channel }}
         # NOTE: manifest-*.json are not part of this repo; cache key uses channel + runner only.
+        key: tx3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.channel }}
+
+    - name: Restore channel toolchain (no save)
+      if: inputs.save-cache == 'false'
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.tx3/${{ inputs.channel }}
         key: tx3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.channel }}
 
     - name: Warm channel cache

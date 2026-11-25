@@ -8,18 +8,26 @@ the interface and input fixture, `row` emits one language record and
 prints as a Markdown table.
 """
 import argparse
+import hashlib
 import http.server
 import json
 import pathlib
+import re
 import sys
 
 LANGUAGES = ["rust", "python", "go", "typescript", "java", "swift"]
 IDENTITY = ["scope", "name", "version", "manifest_digest", "tii_digest",
             "git_sha", "network", "operation"]
+# Read from the pulled release, so combine takes it from the rows, not the caller.
+RELEASE_FIELDS = ["release_date"]
 LANGUAGE_FIELDS = ["language", "runtime_package", "runtime_version",
                    "tx3c_version", "trix_version", "run_url", "date", "result"]
 PLACEHOLDER_TX = "84a40080018002000300a0f5f6"  # an empty Conway tx body
 PLACEHOLDER_HASH = "00" * 32
+# Release-supplied names become identifiers in consumer source, so only plain ones pass.
+FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SYMBOL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+GO_MODULE = re.compile(r"[A-Za-z0-9_.~/-]+")
 
 
 def fail(message):
@@ -38,6 +46,12 @@ def camel(name):
 
 def pascal(name):
     return "".join(p[:1].upper() + p[1:] for p in words(name))
+
+
+def checked(pattern, what, name):
+    if not isinstance(name, str) or not pattern.fullmatch(name):
+        fail(f"{what} {json.dumps(name)} is not a plain identifier")
+    return name
 
 
 def kind_of(schema):
@@ -60,8 +74,8 @@ def hex_bytes(value, joiner):
 
 def utxo_parts(value):
     tx, sep, index = str(value).partition("#")
-    if not sep or not index.isdigit():
-        fail(f"expected a UtxoRef of the form <tx-hash>#<index>, got {value!r}")
+    if not sep or not index.isdigit() or not re.fullmatch(r"(?:[0-9a-fA-F]{2})+", tx):
+        fail(f"expected a UtxoRef of the form <hex tx-hash>#<index>, got {value!r}")
     return tx, int(index)
 
 
@@ -115,9 +129,15 @@ def binding(tii, operation, profile, args):
         fail(f"operation '{operation}' is not declared by the interface")
     if profile not in tii.get("profiles", {}):
         fail(f"profile '{profile}' is not declared by the interface")
+    checked(SYMBOL_NAME, "protocol name", tii.get("protocol", {}).get("name"))
+    checked(SYMBOL_NAME, "operation", operation)
+    checked(SYMBOL_NAME, "profile", profile)
+    for name in tii.get("parties", {}):
+        checked(FIELD_NAME, "party", name)
     schema = tx.get("params", {})
     params = []
     for name in schema.get("required", []):
+        checked(FIELD_NAME, "parameter", name)
         kind = kind_of(schema["properties"][name])
         if kind is None:
             fail(f"parameter '{name}' has a type the harness cannot bind yet: "
@@ -215,8 +235,7 @@ public final class Consumer {{
   }}
 }}
 """,
-    "swift": """import BigInt
-import Foundation
+    "swift": """{bigint}import Foundation
 import {client}
 import Tx3SDK
 
@@ -244,14 +263,15 @@ def render(ns):
     calls = "".join(PARTY_CALL[lang].format(p=p, P=pascal(p), v=party(lang, a)) for p, a in parties)
     protocol = tii["protocol"]["name"]
     source = TEMPLATES[lang].format(
-        crate=protocol.replace("-", "_"), module=ns.module or protocol,
+        crate=protocol.replace("-", "_"),
+        module=checked(GO_MODULE, "Go module", ns.module) if ns.module else protocol,
         package=f"land.tx3.generated.{camel(protocol)}", client=f"{pascal(protocol)}Client",
         params_type=f"{pascal(ns.operation)}Params", op=ns.operation,
         op_camel=camel(ns.operation), op_pascal=pascal(ns.operation),
         profile_json=json.dumps(ns.profile), profile_pascal=pascal(ns.profile),
         profile_upper=ns.profile.upper().replace("-", "_"), profile_camel=camel(ns.profile),
         parties=calls, fields=", ".join(fields), positional=", ".join(fields),
-        labelled=", ".join(fields))
+        labelled=", ".join(fields), bigint="import BigInt\n" if ns.bigint else "")
     pathlib.Path(ns.out).write_text(source)
 
 
@@ -294,8 +314,10 @@ def wire_matches(kind, expected, actual):
         actual = actual[WIRE_TAGS[kind]]
     if kind in ("bytes", "utxoref", "address") and isinstance(actual, str):
         return actual.lower().removeprefix("0x") == str(expected).lower().removeprefix("0x")
-    if kind == "integer" and isinstance(actual, (int, str)) and not isinstance(actual, bool):
-        return str(actual) == str(expected)
+    if kind == "integer":
+        return isinstance(actual, (int, str)) and not isinstance(actual, bool) and str(actual) == str(expected)
+    if kind == "boolean":
+        return isinstance(actual, bool) and actual is expected
     return actual == expected
 
 
@@ -323,34 +345,57 @@ def verify(ns):
 
 
 def row(ns):
-    record = {k: getattr(ns, k) for k in IDENTITY + LANGUAGE_FIELDS}
+    record = {k: getattr(ns, k) for k in IDENTITY + RELEASE_FIELDS + LANGUAGE_FIELDS}
     record["reason"] = ns.reason or ""
     pathlib.Path(ns.out).write_text(json.dumps(record, indent=2) + "\n")
 
 
 def combine(ns):
+    """Fold language records into one result. A row given as <language>=<path>
+    must carry that language, and every row must come from this run (--run-url)."""
     rows = []
-    for path in ns.rows:
+    if ns.artifact_root:
+        for lang in LANGUAGES:
+            path = pathlib.Path(f"{ns.artifact_root}{lang}") / f"{lang}.json"
+            if path.exists():
+                ns.rows.append(f"{lang}={path}")
+    for arg in ns.rows:
+        expected, sep, path = arg.partition("=")
+        if not sep:
+            expected, path = None, arg
         try:
-            rows.append(json.loads(pathlib.Path(path).read_text()))
+            r = json.loads(pathlib.Path(path).read_text())
         except (OSError, ValueError) as exc:
-            rows.append({"result": "fail", "reason": f"unreadable record {path}: {exc}"})
+            r = {"language": expected, "result": "fail", "reason": f"unreadable record {path}: {exc}"}
+        if expected and r.get("language") != expected:
+            r = {**r, "language": expected, "result": "fail",
+                 "reason": f"record {path} names language {json.dumps(r.get('language'))}"}
+        rows.append(r)
     identity = {k: getattr(ns, k) for k in IDENTITY}
+    if ns.release:
+        scope, _, rest = ns.release.partition("/")
+        name, _, version = rest.partition(":")
+        identity.update(scope=scope, name=name, version=version)
+    identity["network"] = identity["network"] or ns.profile
     if ns.identity_from:
         try:
             source = json.loads(pathlib.Path(ns.identity_from).read_text())
         except (OSError, ValueError):
             source = {}
         identity = {k: source.get(k, "") for k in IDENTITY}
+    dates = {r.get("release_date") for r in rows if r.get("release_date")}
+    identity["release_date"] = dates.pop() if len(dates) == 1 else ""
     by_language = {}
     for r in rows:
-        problems = [f for f in IDENTITY + LANGUAGE_FIELDS if not r.get(f)]
-        problems += [f for f in IDENTITY if r.get(f) and r[f] != identity[f]]
+        problems = [f for f in IDENTITY + RELEASE_FIELDS + LANGUAGE_FIELDS if not r.get(f)]
+        problems += [f for f in IDENTITY + RELEASE_FIELDS if r.get(f) and r[f] != identity[f]]
+        if ns.run_url and r.get("run_url") and r["run_url"] != ns.run_url:
+            problems.append("run_url")
         if r.get("result") == "pass" and problems:
             r = {**r, "result": "fail", "reason": f"missing or mismatched fields: {problems}"}
         if r.get("language") in by_language:
             r = {**r, "result": "fail", "reason": "duplicate record for this language"}
-        by_language[r.get("language", f"unknown-{len(by_language)}")] = r
+        by_language[r.get("language") or f"unknown-{len(by_language)}"] = r
     languages = []
     for lang in LANGUAGES:
         languages.append(by_language.pop(lang, {
@@ -369,11 +414,16 @@ def combine(ns):
 def summary(ns):
     result = json.loads(pathlib.Path(ns.result).read_text())
     print(f"### Client checks: {result['scope']}/{result['name']}:{result['version']} "
-          f"({result['operation']}, {result['network']}) — {result['result']}\n")
+          f"(released {result.get('release_date') or 'unknown'}; {result['operation']}, "
+          f"{result['network']}) — {result['result']}\n")
     print("| Language | Result | Runtime package | Reason |\n|---|---|---|---|")
     for r in result["languages"]:
         package = f"{r.get('runtime_package', '')} {r.get('runtime_version', '')}".strip()
         print(f"| {r.get('language')} | {r.get('result')} | {package} | {r.get('reason', '')} |")
+
+
+def call_key(ns):
+    print(hashlib.sha256(json.dumps(ns.inputs).encode()).hexdigest()[:12])
 
 
 def main():
@@ -385,23 +435,28 @@ def main():
             p.add_argument(f"--{flag}", required=True)
     sub.choices["render"].add_argument("--lang", required=True, choices=LANGUAGES)
     sub.choices["render"].add_argument("--module", default="")
+    sub.choices["render"].add_argument("--bigint", action="store_true",
+                                       help="Swift: the generated package depends on BigInt")
     sub.choices["render"].add_argument("--out", required=True)
     sub.choices["verify"].add_argument("--record", required=True)
     p = sub.add_parser("mock-trp")
     p.add_argument("--record", required=True)
     p.add_argument("--port-file", required=True)
     p = sub.add_parser("row")
-    for flag in IDENTITY + LANGUAGE_FIELDS + ["reason", "out"]:
+    for flag in IDENTITY + RELEASE_FIELDS + LANGUAGE_FIELDS + ["reason", "out"]:
         p.add_argument(f"--{flag.replace('_', '-')}", dest=flag, default="")
     p = sub.add_parser("combine")
-    for flag in IDENTITY + ["date", "run_url", "out"]:
+    for flag in IDENTITY + ["release", "profile", "date", "run_url", "out"]:
         p.add_argument(f"--{flag.replace('_', '-')}", dest=flag, default="")
     p.add_argument("--identity-from", default="", help="take the release identity from a record")
-    p.add_argument("rows", nargs="*")
+    p.add_argument("--artifact-root", default="",
+                   help="read <root><language>/<language>.json for each language")
+    p.add_argument("rows", nargs="*", help="records, each <path> or <language>=<path>")
     sub.add_parser("summary").add_argument("result")
+    sub.add_parser("call-key", help="short key for one workflow call's inputs").add_argument("inputs", nargs="*")
     ns = parser.parse_args()
     {"render": render, "verify": verify, "mock-trp": mock_trp,
-     "row": row, "combine": combine, "summary": summary}[ns.command](ns)
+     "row": row, "combine": combine, "summary": summary, "call-key": call_key}[ns.command](ns)
 
 
 if __name__ == "__main__":
