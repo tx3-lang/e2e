@@ -14,7 +14,7 @@ on:
         description: 'Protocol id from inventory/protocols.json'
         required: true
       resolve:
-        description: 'auto: resolve again only while the release has no passing resolution; always: resolve again'
+        description: 'auto: resolve again only while the latest resolution of the release is not a pass; always: resolve again'
         type: choice
         options: [auto, always]
         default: auto
@@ -43,6 +43,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      # An earlier refresh's records may still sit in an unmerged evidence PR.
+      # Without them this run would resolve again and could supersede their pass.
+      - name: No unmerged evidence for this protocol
+        run: python3 inventory/lib/inventory.py pending --protocol "$PROTOCOL"
 
       - name: Release spec from the inventory
         run: |

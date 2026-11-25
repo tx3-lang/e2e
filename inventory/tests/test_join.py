@@ -101,6 +101,16 @@ class Outstanding(unittest.TestCase):
             r["missing"],
         )
 
+    def test_a_release_filling_an_empty_field_is_a_correction_not_a_conflict(self):
+        records = complete_records(identity())
+        first = copy.deepcopy(records[0])
+        first.update(date="2026-11-20T08:00:00Z")
+        first["identity"]["git_sha"] = None
+        self.assertIn("release: git_sha missing", row([first])["missing"])
+        r = row([first] + records)
+        self.assertEqual((r["status"], r["missing"]), ("complete", []))
+        self.assertEqual([h["reason"] for h in r["history"] if h["kind"] == "release"], [None, None])
+
     def test_an_old_version_conflict_does_not_block_the_current_release(self):
         records = complete_records(identity())
         old = copy.deepcopy(records[0])

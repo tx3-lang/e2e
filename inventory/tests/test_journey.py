@@ -12,7 +12,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from support import FIXTURES, LANGUAGES
+from support import FIXTURES, LANGUAGES, order_tx
 
 import inventory
 
@@ -45,12 +45,17 @@ TII = {
 
 
 class TRP(http.server.BaseHTTPRequestHandler):
-    reply = {}
+    """Answers the n-th POST with replies[n] (the last one once they run out) and
+    records each request body, path and `dmtr-api-key` header."""
+
+    replies = []
     requests = []
+    seen = []
 
     def do_POST(self):
         TRP.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-        self._send(json.dumps(TRP.reply).encode())
+        TRP.seen.append((self.path, self.headers.get("dmtr-api-key")))
+        self._send(json.dumps(TRP.replies[min(len(TRP.requests), len(TRP.replies)) - 1]).encode())
 
     def do_GET(self):
         self._send(b"ok", 200 if self.path.startswith("/ok/") else 404)
@@ -81,7 +86,8 @@ class Journey(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        TRP.reply, TRP.requests[:] = {"jsonrpc": "2.0", "id": "1", "result": {"tx": GOLDEN, "hash": GOLDEN_HASH}}, []
+        TRP.replies[:] = [{"jsonrpc": "2.0", "id": "1", "result": {"tx": GOLDEN, "hash": GOLDEN_HASH}}]
+        TRP.requests[:], TRP.seen[:] = [], []
         self.pull = self.dir / "pull"
         self.pull.mkdir()
         (self.pull / "main.tii").write_text(json.dumps(TII))
@@ -108,12 +114,14 @@ class Journey(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_journey(self, **env):
+    def run_journey(self, **overrides):
+        """Run journey 13; an override of None unsets that variable."""
         spec, out = self.dir / "spec.json", self.dir / "evidence"
         spec.write_text(json.dumps(self.spec))
         env = dict(os.environ, TX3_TRIX_PATH=str(self.trix), FAKE_PULL=str(self.pull), TMPDIR=str(self.dir),
                    PUBLIC_RESOLUTION_SPEC=str(spec), PUBLIC_RESOLUTION_OUT=str(out),
-                   TRP_ENDPOINT=f"{self.base}/trp", NO_PROXY="127.0.0.1", no_proxy="127.0.0.1", **env)
+                   TRP_ENDPOINT=f"{self.base}/trp", NO_PROXY="127.0.0.1", no_proxy="127.0.0.1")
+        env = {k: v for k, v in {**env, **overrides}.items() if v is not None}
         done = subprocess.run(["bash", str(REPO / "run.sh"), "--journey", "13-public-resolution"], env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
         found = {p.stem: inventory.load(p) for p in out.glob("*.json")} if out.is_dir() else {}
@@ -153,8 +161,28 @@ class Journey(unittest.TestCase):
         self.assertEqual(found["resolution"]["reason"], "no public TRP endpoint is known for network 'devnet'")
         self.assertEqual(TRP.requests, [])
 
+    def test_the_public_endpoint_and_key_are_used_without_overrides(self):
+        key = "trp1loopbackkey"
+        public = json.dumps({"preprod": [f"{self.base}/public-trp", key]})
+        done, found = self.run_journey(TRP_ENDPOINT=None, TRP_API_KEY=None, INVENTORY_TEST_PUBLIC_TRP=public)
+        self.assertEqual(done.returncode, 0, done.stdout)
+        self.assertEqual(TRP.seen, [("/public-trp", key)] * 2)
+        self.assertEqual((found["resolution"]["result"], found["resolution"]["endpoint"]), ("pass", f"{self.base}/public-trp"))
+        stored = [p.read_text() for p in (self.dir / "evidence").rglob("*") if p.is_file()]
+        self.assertFalse([text for text in stored if key in text], "the key never appears in a record")
+
+    def test_cbor_a_second_request_does_not_reproduce_is_outstanding(self):
+        other = order_tx()
+        TRP.replies.append({"jsonrpc": "2.0", "id": "1", "result": {"tx": other, "hash": inventory.decode_tx(other)["tx_hash"]}})
+        done, found = self.run_journey()
+        self.assertNotEqual(done.returncode, 0)
+        rec = found["resolution"]
+        self.assertEqual((rec["result"], rec["reproducible"], rec["reason"]),
+                         ("outstanding", False, "a repeated resolution returned different CBOR"))
+        self.assertEqual(len(TRP.requests), 2)
+
     def test_a_malformed_reply_is_an_outstanding_record(self):
-        TRP.reply = {"error": "Unauthorized"}
+        TRP.replies[:] = [{"error": "Unauthorized"}]
         done, found = self.run_journey()
         self.assertNotEqual(done.returncode, 0)
         self.assertEqual((found["resolution"]["result"], found["resolution"]["reason"]),

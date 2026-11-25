@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -51,11 +53,11 @@ def utc(value) -> str:
     """A record date normalized to a UTC timestamp such as 2026-11-20T12:00:00Z."""
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if "T" in value else None
-    except (AttributeError, TypeError, ValueError):
-        parsed = None
-    if parsed is None or parsed.tzinfo is None:
-        raise ValueError(f"date {value!r} is not a UTC timestamp such as 2026-11-20T12:00:00Z")
-    return parsed.astimezone(timezone.utc).strftime(STAMP)
+        if parsed is not None and parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).strftime(STAMP)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        pass
+    raise ValueError(f"date {value!r} is not a UTC timestamp such as 2026-11-20T12:00:00Z")
 
 
 def load(path):
@@ -96,7 +98,8 @@ def records(root: Path, pid: str) -> list:
         except ValueError as err:
             rec, problems = {}, [f"not JSON ({err})"]
         if problems:
-            rec = {k: rec.get(k) for k in ("kind", "date") if isinstance(rec.get(k), str)}
+            kept = rec if isinstance(rec, dict) else {}
+            rec = {k: kept[k] for k in ("kind", "date") if isinstance(kept.get(k), str)}
             rec["_invalid"] = "; ".join(problems)
         rec["_file"] = f"evidence/{pid}/{path.name}"
         found.append(rec)
@@ -169,6 +172,8 @@ def _tools_gaps(rec, ident, cfg, current) -> list:
 
 
 def _registry_gaps(rec, ident, cfg, current) -> list:
+    if rec.get("result") != "pass" and not rec.get("links_checked"):
+        return _result(rec)  # the pull or a digest failed before any link was checked
     gaps = [f"README lacks {c.get('effect')}" for c in rec.get("checks", []) if not c.get("passed")]
     gaps += [f"dead link {link.get('url')} ({link.get('status')})" for link in rec.get("links", []) if not link.get("ok")]
     checked = rec.get("links_checked") or {}
@@ -188,12 +193,16 @@ GAPS = {
 
 
 def conflicted_versions(recs) -> set:
-    """Versions recorded by release records with different identities."""
+    """Versions whose release records state two different values for one identity field.
+    A field one record leaves empty and a later one states is a correction, not a conflict."""
     seen = {}
     for rec in recs:
         if rec.get("kind") == "release":
-            seen.setdefault(identity_of(rec)["version"], set()).add(json.dumps(identity_of(rec), sort_keys=True))
-    return {version for version, identities in seen.items() if len(identities) > 1}
+            fields = seen.setdefault(identity_of(rec)["version"], {})
+            for k, v in identity_of(rec).items():
+                if v:
+                    fields.setdefault(k, set()).add(v)
+    return {version for version, fields in seen.items() if any(len(values) > 1 for values in fields.values())}
 
 
 def _release_gaps(proto, recs, release) -> list:
@@ -403,7 +412,7 @@ def _forbidden(data) -> list:
 
 
 def url_problem(url):
-    """Why `url` is not a public http(s) link, or None."""
+    """Why `url` is not an http(s) link, or None."""
     if not isinstance(url, str):
         return f"{url!r} is not a URL"
     try:
@@ -437,11 +446,16 @@ def shape_problems(rec: dict) -> list:
         problems.append("sign_off is not an object")
     problems += [f"{k} is not text" for k in ("result", "reason", "coordinate") if not isinstance(rec.get(k) or "", str)]
     for key in LISTS.get(kind, ()):
-        if not (isinstance(rec.get(key) or [], list) and all(isinstance(x, dict) for x in rec.get(key) or [])):
+        if not (isinstance(rec.get(key, []), list) and all(isinstance(x, dict) for x in rec.get(key, []))):
             problems.append(f"{key} is not a list of objects")
-    urls = [v for k, v in rec.items() if (k.endswith("_url") or k == "ci_run") and v]
+    if not isinstance(rec.get("links_checked", {}), dict):
+        problems.append("links_checked is not an object")
     languages = rec.get("languages") if isinstance(rec.get("languages"), list) else []
-    urls += [x.get("run_url") for x in languages if isinstance(x, dict) and x.get("run_url")]
+    rows = [x for x in languages if isinstance(x, dict)]
+    if any(not isinstance(x.get("language", ""), str) for x in rows):
+        problems.append("a language row's language is not text")
+    urls = [v for k, v in rec.items() if (k.endswith("_url") or k == "ci_run") and v]
+    urls += [x.get("run_url") for x in rows if x.get("run_url")]
     return problems + [p for p in map(url_problem, urls) if p]
 
 
@@ -488,6 +502,26 @@ def add_record(root: Path, pid: str, rec: dict) -> Path:
     return path
 
 
+def _git(root: Path, *args) -> str:
+    return subprocess.run(["git", "-C", str(root), *args], check=True, stdout=subprocess.PIPE, text=True).stdout
+
+
+def pending_evidence(root: Path, pid: str, remote: str = "origin") -> list:
+    """The refresh branches on `remote` (`inventory/<pid>-<UTC stamp>`) holding `pid` records
+    this checkout lacks: an evidence PR not merged yet, or a branch pushed without one. Compared
+    by file, so a squash-merged branch counts as merged."""
+    branch = re.compile(rf"refs/heads/(inventory/{re.escape(pid)}-\d{{8}}T\d{{6}}Z)")
+    pending = []
+    for line in _git(root, "ls-remote", "--heads", remote).splitlines():
+        found = branch.fullmatch(line.partition("\t")[2])
+        if not found:
+            continue
+        _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", remote, found.group(0))
+        if _git(root, "diff", "--name-only", "--diff-filter=AM", "HEAD", "FETCH_HEAD", "--", f"evidence/{pid}/").strip():
+            pending.append(found.group(1))
+    return pending
+
+
 def ingest(root: Path, pid: str, source: Path) -> None:
     for path in sorted(source.glob("*.json")):
         print(add_record(root, pid, load(path)).relative_to(root))
@@ -502,8 +536,8 @@ def ingest(root: Path, pid: str, source: Path) -> None:
 
 
 def build_spec(root: Path, pid: str, resolve: str = "auto") -> dict:
-    """The journey's input. `resolve` auto resolves again only while the release has
-    no passing resolution, so a later docs, tools or clients refresh keeps it."""
+    """The journey's input. `resolve` auto resolves again only while the release's latest
+    resolution is not a pass, so a later docs, tools or clients refresh keeps it."""
     cfg, recs = load(root / "protocols.json"), joinable(records(root, pid))
     release = current_release(recs)
     if release is None:
@@ -602,9 +636,12 @@ def compare(summary: dict, expect: dict) -> list:
 
 
 def public_trp(network: str) -> tuple:
-    if network not in PUBLIC_TRP:
+    # The offline journey test points a network at a loopback TRP; live runs never set this.
+    known = dict(PUBLIC_TRP, **json.loads(os.environ.get("INVENTORY_TEST_PUBLIC_TRP") or "{}"))
+    if network not in known:
         raise SystemExit(f"no public TRP endpoint is known for network {network!r}")
-    return PUBLIC_TRP[network]
+    url, key = known[network]
+    return url, key
 
 
 def _public(url: str) -> str:
@@ -739,6 +776,9 @@ def main(argv=None) -> int:
     cmd.add_argument("--protocol", required=True)
     cmd.add_argument("--resolve", choices=("auto", "always"), default="auto")
     sub.add_parser("endpoint", help="a network's public TRP URL and key").add_argument("--network", required=True)
+    cmd = sub.add_parser("pending", help="refresh branches whose records are unmerged; exits 1 if any")
+    cmd.add_argument("--protocol", required=True)
+    cmd.add_argument("--remote", default="origin")
     cmd = sub.add_parser("request", help="the trp.resolve request for a pulled TII")
     cmd.add_argument("--spec", required=True)
     cmd.add_argument("--tii", required=True)
@@ -773,6 +813,12 @@ def main(argv=None) -> int:
     if args.command == "endpoint":
         print(" ".join(public_trp(args.network)))
         return 0
+    if args.command == "pending":
+        branches = pending_evidence(args.root, args.protocol, args.remote)
+        for name in branches:
+            print(f"{name} holds {args.protocol} evidence this checkout lacks; merge its PR, "
+                  "or close it and delete the branch, before refreshing again", file=sys.stderr)
+        return 1 if branches else 0
     if args.command == "request":
         print(dump(build_request(load(args.tii), load(args.spec))), end="")
         return 0

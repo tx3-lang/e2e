@@ -146,17 +146,41 @@ class Shapes(Records.__base__):
 
     def test_refuses_shapes_the_join_cannot_read(self):
         release = next(r for r in complete_records(identity(version="0.2.0")) if r["kind"] == "release")
+        registry = dict(next(r for r in complete_records(identity()) if r["kind"] == "registry"),
+                        date="2026-11-23T10:00:00Z")
         clients = dict(inventory.load(FIXTURES / "client-checks-combined.json"), kind="clients")
         bad = [
             dict(release, identity=dict(release["identity"], version=None)),
+            dict(release, identity="0.1.0"),
             dict(release, sign_off="recorded"),
             dict(clients, languages={"rust": {}}),
+            dict(clients, languages=None),
+            dict(clients, languages=[1]),
+            dict(clients, languages=[dict(clients["languages"][0], language=["rust"])]),
+            dict(registry, checks=None),
+            dict(registry, links=False),
+            dict(registry, links=[1]),
+            dict(registry, links_checked=["x"]),
+            dict(self.docs(), docs_url=["https://example.test/a"]),
             dict(self.docs(), date="2026-11-22"),
             dict(self.docs(), date="2026-11-22T10:00:00"),
+            dict(self.docs(), date="9999-12-31T23:30:00-01:00"),
         ]
+        before = tree(self.root)
         for rec in bad:
             with self.subTest(rec=rec), self.assertRaises(SystemExit):
                 inventory.add_record(self.root, "swap", rec)
+        self.assertEqual(tree(self.root), before, "a refused record is never stored")
+
+    def test_absent_lists_are_valid(self):
+        s = inventory.build_spec(self.root, "swap")
+        failed = inventory.registry_record(s, "", "2026-11-23T10:00:00Z", error="registry pull failed")
+        self.assertFalse({"checks", "links", "links_checked"} & set(failed))
+        inventory.add_record(self.root, "swap", failed)
+        clients = inventory.load(FIXTURES / "client-checks-combined.json")
+        del clients["languages"]
+        inventory.add_record(self.root, "swap", dict(clients, kind="clients"))
+        self.assertEqual([h for h in self.row()["history"] if h["result"] == "invalid"], [])
 
     def test_malformed_stored_records_stay_in_the_history_only(self):
         release = next(r for r in complete_records(identity(version="0.2.0")) if r["kind"] == "release")
@@ -168,13 +192,19 @@ class Shapes(Records.__base__):
                                               "identity": identity(), "languages": {"rust": {}}},
             "20261123T030000Z-docs.json": dict(self.docs(), date="2026-11-23", identity=identity()),
         }
+        stored.update({
+            "20261123T050000Z-release.json": dict(release, identity="0.1.0"),
+            "20261123T060000Z-docs.json": None,
+            "20261123T070000Z-tools.json": [],
+            "20261123T080000Z-docs.json": dict(self.docs(), date="0001-01-01T00:30:00+01:00", identity=identity()),
+        })
         for name, rec in stored.items():
             (folder / name).write_text(json.dumps(rec))
         (folder / "20261123T040000Z-tools.json").write_text("{")
         row = self.row()
         self.assertEqual((row["status"], row["identity"]["version"]), ("complete", "0.1.0"))
         invalid = [h for h in row["history"] if h["result"] == "invalid"]
-        self.assertEqual(len(invalid), 5)
+        self.assertEqual(len(invalid), len(stored) + 1)
         self.assertTrue(all(h["reason"] for h in invalid))
 
     def test_dates_are_normalized_to_utc(self):
@@ -221,6 +251,14 @@ class Shapes(Records.__base__):
         stated = inventory.add_record(self.root, "swap", dict(self.docs(), identity={"version": "0.2.0"}))
         self.assertEqual(inventory.load(stated)["identity"], identity(version="0.2.0"))
 
+    def test_a_nested_identity_for_another_release_is_kept(self):
+        release = next(r for r in complete_records(identity(version="0.2.0")) if r["kind"] == "release")
+        inventory.add_record(self.root, "swap", dict(release, date="2026-11-21T09:00:00Z"))
+        path = inventory.add_record(self.root, "swap", dict(self.docs(), identity=identity()))
+        self.assertEqual(inventory.load(path)["identity"], identity())
+        self.assertIn("docs: latest evidence is for another release (version 0.1.0); rerun it for 0.2.0",
+                      self.row()["missing"])
+
     def test_registry_evidence_follows_the_current_links(self):
         inventory.add_record(self.root, "swap", dict(self.docs(), docs_url="https://example.test/swap/docs-v2"))
         self.assertEqual(self.row()["missing"],
@@ -229,6 +267,39 @@ class Shapes(Records.__base__):
         rec = inventory.registry_record(s, readme_for(s), "2026-11-23T10:00:00Z", get=lambda url: {"status": 200, "ok": True})
         inventory.add_record(self.root, "swap", rec)
         self.assertEqual(self.row()["status"], "complete")
+
+    def test_registry_evidence_follows_the_current_tools_links(self):
+        for field in ("skill_url", "tools_url"):
+            with self.subTest(field=field):
+                self.tearDown()
+                self.setUp()
+                inventory.add_record(self.root, "swap", self.tools(**{field: f"https://example.test/swap/{field}-v2"}))
+                self.assertEqual(self.row()["missing"],
+                                 [f"registry: checked older links ({field}); rerun the registry check for the current ones"])
+
+    def test_a_passing_registry_record_without_its_checked_links_counts_as_drifted(self):
+        passing = inventory.load(self.root / "evidence" / "swap" / "20261120T130000Z-registry.json")
+        del passing["links_checked"]
+        inventory.add_record(self.root, "swap", dict(passing, date="2026-11-23T10:00:00Z"))
+        self.assertEqual(self.row()["missing"], ["registry: checked older links (docs_url, example_url, tools_url, "
+                                                 "skill_url); rerun the registry check for the current ones"])
+
+    def test_a_failed_registry_check_shows_its_own_reason(self):
+        """What journey 13 records in a registry-only refresh when the pull or a digest fails."""
+        reasons = ("registry pull of example/swap:0.1.0 failed: manifest unknown",
+                   "manifest digest sha256:" + "9" * 64 + " differs from the release's",
+                   "TII digest sha256:" + "8" * 64 + " differs from the release's")
+        for reason in reasons:
+            with self.subTest(reason=reason):
+                self.tearDown()
+                self.setUp()
+                s, out = Path(self.tmp.name) / "spec.json", Path(self.tmp.name) / "out"
+                s.write_text(json.dumps(inventory.build_spec(self.root, "swap")))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    inventory.main(["registry", "--spec", str(s), "--out", str(out), "--error", reason])
+                    inventory.main(["--root", str(self.root), "ingest", "--protocol", "swap", str(out)])
+                row = inventory.load(self.root / "rows" / "swap.json")
+                self.assertEqual((row["status"], row["missing"]), ("outstanding", [f"registry: {reason}"]))
 
     def test_spec_resolves_again_only_without_a_passing_resolution(self):
         self.assertFalse(inventory.build_spec(self.root, "swap")["resolve"])
@@ -265,6 +336,72 @@ class Shapes(Records.__base__):
         conflict = merged.stdout.split("<<<<<<<")[1].split(">>>>>>>")[0]
         self.assertIn("New protocols complete: 2 of 3 (example/alpha, example/beta)", conflict)
         self.assertIn("New protocols complete: 2 of 3 (example/beta, example/gamma)", conflict)
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class Pending(unittest.TestCase):
+    """A refresh waits while an earlier refresh's evidence branch is unmerged."""
+
+    def git(self, *args, cwd=None):
+        subprocess.run(["git", "-C", str(cwd or self.repo), "-c", "user.name=test", "-c", "user.email=test@example.test",
+                        "-c", "commit.gpgsign=false", *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.repo = base / "repo"
+        self.git("init", "--quiet", "--bare", str(base / "origin.git"), cwd=base)
+        self.git("init", "--quiet", "-b", "main", str(self.repo), cwd=base)
+        shutil.copytree(build_fixtures.EXAMPLE, self.repo / "inventory")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "main")
+        self.git("remote", "add", "origin", str(base / "origin.git"))
+        self.git("push", "--quiet", "origin", "main")
+        self.root = self.repo / "inventory"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def push(self, branch, path, text="{}\n"):
+        """Push `branch`: main plus one file, then return to main."""
+        self.git("switch", "--quiet", "-c", branch)
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_text(text)
+        self.git("add", path)
+        self.git("commit", "--quiet", "-m", branch)
+        self.git("push", "--quiet", "origin", branch)
+        self.git("switch", "--quiet", "main")
+
+    def test_an_unmerged_evidence_branch_holds_the_refresh(self):
+        self.assertEqual(inventory.pending_evidence(self.root, "swap"), [])
+        self.push("inventory/swap-20261123T100000Z", "inventory/evidence/swap/20261123T100000Z-resolution.json")
+        self.push("inventory/lending-20261123T100000Z", "inventory/evidence/lending/20261123T100000Z-docs.json")
+        self.assertEqual(inventory.pending_evidence(self.root, "swap"), ["inventory/swap-20261123T100000Z"])
+        self.assertEqual(inventory.pending_evidence(self.root, "lending"), ["inventory/lending-20261123T100000Z"])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(inventory.main(["--root", str(self.root), "pending", "--protocol", "swap"]), 1)
+        self.assertIn("inventory/swap-20261123T100000Z holds swap evidence", err.getvalue())
+
+    def test_a_changed_record_on_a_branch_is_unmerged_too(self):
+        stored = next((self.root / "evidence" / "swap").glob("*-docs.json")).relative_to(self.repo)
+        self.push("inventory/swap-20261123T100000Z", str(stored), "{\"changed\": true}\n")
+        self.assertEqual(inventory.pending_evidence(self.root, "swap"), ["inventory/swap-20261123T100000Z"])
+
+    def test_merged_and_unrelated_branches_do_not_hold_it(self):
+        record = "inventory/evidence/swap/20261123T100000Z-resolution.json"
+        self.push("inventory/swap-20261123T100000Z", record)
+        later = "inventory/evidence/swap/20261124T100000Z-docs.json"  # a later refresh, merged after it
+        for path, message in ((record, "squash merge"), (later, "later refresh")):
+            (self.repo / path).write_text("{}\n")
+            self.git("add", path)
+            self.git("commit", "--quiet", "-m", message)
+        self.push("inventory/swap-v2-20261123T100000Z", "inventory/evidence/swap/20261123T110000Z-docs.json")
+        self.push("inventory/render-0123456789ab", "inventory/evidence/swap/20261123T120000Z-docs.json")
+        self.push("inventory/swap-20261123T130000Z", "inventory/rows/swap.json", "{}\n")
+        self.push("inventory/swap-20261123T140000Z", "inventory/evidence/lending/20261123T140000Z-docs.json")
+        self.assertEqual(inventory.pending_evidence(self.root, "swap"), [])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(inventory.main(["--root", str(self.root), "pending", "--protocol", "swap"]), 0)
 
 
 class Garbage(socketserver.BaseRequestHandler):

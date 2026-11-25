@@ -25,10 +25,10 @@ and the row names the mismatch.
 
 | Kind | Supplied by | Complete when |
 |---|---|---|
-| `release` | the protocol's publication pass | every identity field, the UTC release `date`, `source_tag`, `source_url`, the tagged `ci_run`, the `registry_url` page and `sign_off.status: recorded` are present. The approval receipt stays internal: only its status and date appear here. Two records of one version with different identities are a conflict, because a published version is never replaced |
+| `release` | the protocol's publication pass | every identity field, the UTC release `date`, `source_tag`, `source_url`, the tagged `ci_run`, the `registry_url` page and `sign_off.status: recorded` are present. The approval receipt stays internal: only its status and date appear here. Two records of one version that state different values for an identity field are a conflict, because a published version is never replaced. A later record that fills a field an earlier one left empty is a correction |
 | `reconciliation` | TxPipe, before counting | `coordinate` matches and `result` is `new`. Public identities and aliases (for example Dano Finance and Danogo) are checked against existing source, the historical catalog and every live registry namespace, and the record lists what was `checked`. A coordinate already in the baseline never counts |
 | `resolution` | journey 13, via the refresh workflow | the pulled release matched both digests, the network's public TRP returned an unsigned transaction that a second identical request reproduced byte for byte, and its independently decoded effects match `expect.json` |
-| `registry` | journey 13 | the release README carries the version, the six client package references and the docs, example, MCP tools and Skill links, every recorded link answers, and the links it checked are the ones the current `docs` and `tools` records name |
+| `registry` | journey 13 | the release README carries the version, the six client package references and the docs, example, MCP tools and Skill links, every recorded link answers, and the links it checked are the ones the current `docs` and `tools` records name. When the pull or a digest check fails first, the row shows that reason |
 | `clients` | the client checks' combined result (`client_check.py combine` in journey `13-client-checks`) | each of the six languages in `protocols.json` has a row with `language`, `runtime_package`, `runtime_version`, `tx3c_version`, `trix_version`, `run_url`, `date` and `result: pass`, and any identity field a row states is the release's |
 | `docs` | the documentation producer | `docs_url` and the versioned `example_url` are recorded with `result: pass` |
 | `tools` | the tools and Skills producer | `tools_url`, `skill_url` and the dated `verification_url` are recorded, `tool_operation` is the release's operation, and `result` is `pass` |
@@ -42,11 +42,13 @@ as stated, and the row reports that its latest evidence is for another release. 
 a `reason`, the diagnosis shown when it is not `pass`.
 
 `record` refuses what the join cannot read: a `date` that is not a UTC timestamp such as
-`2026-11-20T12:00:00Z` (an offset is converted to UTC; a date without a time or zone is refused), a
-release without its identity's scope, name and version, a `sign_off` that is not an object, lists
-that are not lists of objects, and links (`*_url`, `ci_run`, each language's `run_url`) that are
-not public http(s) URLs. A malformed record already in Git is listed in the history as `invalid`
-with the reason and left out of the join, so it cannot break a render.
+`2026-11-20T12:00:00Z` (an offset is converted to UTC; a date without a time or zone is refused), an
+`identity` that is not an object of text fields, a release without its identity's scope, name and
+version, a `sign_off` or `links_checked` that is not an object, lists (`languages`, `checks`,
+`links`) that are present but not lists of objects, a language row whose `language` is not text,
+and links (`*_url`, `ci_run`, each language's `run_url`) that are not http(s) URLs. A malformed
+record already in Git is listed in the history as `invalid` with the reason and left out of the
+join, so it cannot break a render.
 
 ## When a protocol is published
 
@@ -101,11 +103,18 @@ starts the public verification.
 ## When docs, tools, Skills or clients release later
 
 Only the affected row changes, and the release's passing resolution is kept. The refresh's default
-`resolve=auto` resolves the example again only while the release has no passing resolution;
+`resolve=auto` resolves the example again only while the release's latest resolution is not a pass;
 afterwards it pulls and verifies the release and rechecks only its registry entry and links. The
 example's live inputs are spent by then, so resolving again would fail for reasons unrelated to the
 new release. Pass `-f resolve=always` to resolve again on purpose, after updating the version's
-`inputs.json` and `expect.json`.
+`inputs.json` and `expect.json`. Its result becomes the latest resolution either way, so a failed
+`always` run makes the next `auto` refresh resolve again too.
+
+Merge the previous evidence PR of that protocol before refreshing it again. The refresh refuses to
+start while an `inventory/<protocol>-<stamp>` branch holds records of that protocol that `main`
+lacks, whether its PR is open or was never opened. Without those records the run would resolve
+again and could supersede their pass. Merge that PR, or close it and delete its branch, and then
+dispatch the refresh.
 
 Record what the producer verified, merge, and refresh that protocol:
 
@@ -133,7 +142,8 @@ language stays visible as an outstanding item.
 
 - Storing a record identical to one already stored adds nothing, so a retried command is
   harmless. A rerun of the workflow adds a newly dated run, and the history keeps both.
-- Refreshes of one protocol queue behind each other. Refreshes of different protocols run in
+- Refreshes of one protocol queue behind each other, and a refresh waits for the previous one's
+  evidence PR to merge (see above). Refreshes of different protocols run in
   parallel and write disjoint files under `evidence/<protocol>/` and `rows/<protocol>.json`.
   If two evidence PRs then conflict on the generated `README.md`, merge `main` into the later PR
   and run `python3 inventory/lib/inventory.py render`. The README is derived from the evidence, so
