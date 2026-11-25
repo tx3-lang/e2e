@@ -1,11 +1,13 @@
 """Refreshing the inventory: records on disk, retries, concurrent refreshes,
-the committed renderings, the link checker and the journey's commands."""
+the committed renderings, the link checker, the journey's commands and the
+refresh workflow's guard."""
 
 import contextlib
 import filecmp
 import http.server
 import io
 import json
+import re
 import shutil
 import socketserver
 import subprocess
@@ -20,10 +22,29 @@ import build_fixtures
 import inventory
 
 LIVE = Path(inventory.__file__).resolve().parents[1]
+REFRESH_WORKFLOW = LIVE.parent / ".github" / "workflows" / "inventory-refresh.yml"
 
 
 def tree(root: Path) -> dict:
     return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def job_steps(text: str, job: str) -> list:
+    """One workflow job's steps, read by indentation: each step's top-level keys with their
+    first-line values, and its full text. Standard library only, so no YAML parser."""
+    lines = text.splitlines()
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"  \S", lines[i])), len(lines))
+    steps = []
+    for line in lines[start:end]:
+        item, key = re.match(r" {6}- ([\w-]+):\s*(.*)", line), re.match(r" {8}([\w-]+):\s*(.*)", line)
+        if item:
+            steps.append(({item.group(1): item.group(2)}, line))
+        elif steps and not line.lstrip().startswith("#"):
+            if key:
+                steps[-1][0][key.group(1)] = key.group(2)
+            steps[-1] = (steps[-1][0], steps[-1][1] + "\n" + line)
+    return steps
 
 
 class Committed(unittest.TestCase):
@@ -309,6 +330,18 @@ class Shapes(Records.__base__):
         inventory.add_record(self.root, "swap", failed)
         self.assertTrue(inventory.build_spec(self.root, "swap")["resolve"])
 
+    def test_a_corrected_release_keeps_its_passing_resolution(self):
+        for rec in complete_records(dict(identity(version="0.2.0"), git_sha=None), day="2026-11-21"):
+            inventory.add_record(self.root, "swap", rec)
+        inventory.render(self.root)
+        self.assertEqual(inventory.load(self.root / "rows" / "swap.json")["missing"], ["release: git_sha missing"])
+        corrected = dict(complete_records(identity(version="0.2.0"))[0], date="2026-11-22T09:00:00Z")
+        inventory.add_record(self.root, "swap", corrected)
+        inventory.render(self.root)
+        row = inventory.load(self.root / "rows" / "swap.json")
+        self.assertEqual((row["identity"], row["status"], row["missing"]), (identity(version="0.2.0"), "complete", []))
+        self.assertFalse(inventory.build_spec(self.root, "swap")["resolve"])
+
     @unittest.skipUnless(shutil.which("git"), "needs git merge-file")
     def test_two_completions_conflict_instead_of_merging_a_wrong_count(self):
         base = Path(self.tmp.name) / "base"
@@ -340,11 +373,12 @@ class Shapes(Records.__base__):
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class Pending(unittest.TestCase):
-    """A refresh waits while an earlier refresh's evidence branch is unmerged."""
+    """A refresh is refused while an earlier refresh's evidence branch is unmerged."""
 
-    def git(self, *args, cwd=None):
-        subprocess.run(["git", "-C", str(cwd or self.repo), "-c", "user.name=test", "-c", "user.email=test@example.test",
-                        "-c", "commit.gpgsign=false", *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def git(self, *args, cwd=None) -> str:
+        return subprocess.run(["git", "-C", str(cwd or self.repo), "-c", "user.name=test", "-c",
+                               "user.email=test@example.test", "-c", "commit.gpgsign=false", *args],
+                              check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -381,6 +415,27 @@ class Pending(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(inventory.main(["--root", str(self.root), "pending", "--protocol", "swap"]), 1)
         self.assertIn("inventory/swap-20261123T100000Z holds swap evidence", err.getvalue())
+        self.assertEqual(self.git("rev-parse", "--is-shallow-repository"), "false", "a full clone stays full")
+        self.git("merge", "--quiet", "--no-edit", "origin/inventory/swap-20261123T100000Z")  # REFRESH.md's retry step
+
+    def test_a_shallow_checkout_finds_the_branch_as_ci_does(self):
+        self.push("inventory/swap-20261123T100000Z", "inventory/evidence/swap/20261123T100000Z-resolution.json")
+        shallow = Path(self.tmp.name) / "shallow"
+        origin = (Path(self.tmp.name) / "origin.git").as_uri()
+        self.git("clone", "--quiet", "--depth=1", "-b", "main", origin, str(shallow), cwd=self.tmp.name)
+        self.assertEqual(inventory.pending_evidence(shallow / "inventory", "swap"), ["inventory/swap-20261123T100000Z"])
+        self.assertEqual(self.git("rev-parse", "--is-shallow-repository", cwd=shallow), "true")
+
+    def test_a_branch_behind_main_is_not_read_as_merged(self):
+        failure = {"kind": "resolution", "date": "2026-11-23T10:00:00Z", "identity": identity(), "result": "outstanding",
+                   "reason": "endpoint error -32002: Input not resolved", "inputs": {"sender": "addr_test1example"}}
+        self.push("inventory/swap-20261123T100000Z", "inventory/evidence/swap/20261123T100000Z-resolution.json",
+                  inventory.dump(failure))
+        later = "inventory/evidence/swap/20261124T100000Z-resolution.json"  # similar enough to pair as a rename
+        (self.repo / later).write_text(inventory.dump(dict(failure, date="2026-11-24T10:00:00Z")))
+        self.git("add", later)
+        self.git("commit", "--quiet", "-m", "later refresh")
+        self.assertEqual(inventory.pending_evidence(self.root, "swap"), ["inventory/swap-20261123T100000Z"])
 
     def test_a_changed_record_on_a_branch_is_unmerged_too(self):
         stored = next((self.root / "evidence" / "swap").glob("*-docs.json")).relative_to(self.repo)
@@ -402,6 +457,26 @@ class Pending(unittest.TestCase):
         self.assertEqual(inventory.pending_evidence(self.root, "swap"), [])
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(inventory.main(["--root", str(self.root), "pending", "--protocol", "swap"]), 0)
+
+
+class RefreshWorkflow(unittest.TestCase):
+    """The refresh cannot resolve again while a protocol's earlier evidence is unmerged."""
+
+    GUARD = 'python3 inventory/lib/inventory.py pending --protocol "$PROTOCOL"'
+
+    def test_the_pending_guard_runs_first_and_stops_the_run(self):
+        steps = job_steps(REFRESH_WORKFLOW.read_text(), "verify")
+        where = lambda needle: [i for i, (_, text) in enumerate(steps) if needle in text]  # noqa: E731
+        guard = where(self.GUARD)
+        self.assertEqual(len(guard), 1, "verify runs the guard as a step of its own")
+        later = where("inventory.py spec") + where("journey: 13-public-resolution")
+        self.assertEqual(len(later), 2)
+        self.assertLess(guard[0], min(later), "the guard runs before the spec and the journey")
+        keys = steps[guard[0]][0]
+        self.assertEqual(keys, {"name": keys.get("name"), "run": self.GUARD},
+                         "no condition, continue-on-error or `||` lets the run go on past a failed guard")
+        self.assertEqual([k for k, _ in steps[guard[0]:] if "if" in k], [],
+                         "no later step runs after a failure")
 
 
 class Garbage(socketserver.BaseRequestHandler):

@@ -21,7 +21,9 @@ Every command below runs from the repository root with only `python3` (3.9 or la
 A row is complete when every item below exists for the **same release identity**: registry
 scope/name/version, OCI manifest digest, TII digest, Git SHA, network and operation. Evidence
 recorded for another identity (an older version, another network, other digests) does not count,
-and the row names the mismatch.
+and the row names the mismatch. Evidence recorded while the release record left a field empty
+still counts after a later record of that version fills the field, unless that version's records
+conflict.
 
 | Kind | Supplied by | Complete when |
 |---|---|---|
@@ -142,9 +144,11 @@ language stays visible as an outstanding item.
 
 - Storing a record identical to one already stored adds nothing, so a retried command is
   harmless. A rerun of the workflow adds a newly dated run, and the history keeps both.
-- Refreshes of one protocol queue behind each other, and a refresh waits for the previous one's
-  evidence PR to merge (see above). Refreshes of different protocols run in
-  parallel and write disjoint files under `evidence/<protocol>/` and `rows/<protocol>.json`.
+- Refreshes of one protocol queue behind each other. While the previous one's evidence PR is
+  unmerged, a refresh fails at its unmerged-evidence check (see above), and so does a rerun after
+  a run that pushed its branch. Dispatch it again once that PR is merged, or closed with its
+  branch deleted. Refreshes of different protocols run in parallel and write disjoint files under
+  `evidence/<protocol>/` and `rows/<protocol>.json`.
   If two evidence PRs then conflict on the generated `README.md`, merge `main` into the later PR
   and run `python3 inventory/lib/inventory.py render`. The README is derived from the evidence, so
   the result is the same whichever merges first.

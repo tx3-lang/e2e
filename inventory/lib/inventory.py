@@ -118,7 +118,14 @@ def current_release(recs):
 
 
 def latest(recs, kind, ident) -> dict:
-    found = [r for r in recs if r.get("kind") == kind and identity_of(r) == ident]
+    """The newest `kind` record for the release `ident`. Unless its version is conflicted, evidence
+    keyed to any release record of that version counts: such records differ only in fields one left
+    empty and another filled, so a correction keeps what was verified before it."""
+    same = [ident]
+    if ident["version"] not in conflicted_versions(recs):
+        releases = [identity_of(r) for r in recs if r.get("kind") == "release"]
+        same += [other for other in releases if other["version"] == ident["version"]]
+    found = [r for r in recs if r.get("kind") == kind and identity_of(r) in same]
     return found[-1] if found else {}
 
 
@@ -260,8 +267,9 @@ def build_row(cfg, baseline, proto, stored) -> dict:
         if not rec:
             if same_kind:
                 other = identity_of(same_kind[-1])
-                diff = ", ".join(f"{k} {other[k]}" for k in IDENTITY if other[k] is not None and other[k] != ident[k])
-                missing.append(f"{kind}: latest evidence is for another release ({diff or 'identity unstated'}); "
+                differs = [k for k in IDENTITY if other[k] != ident[k]]
+                named = [f"{k} {other[k]}" for k in differs if other[k]] or [f"{k} unstated" for k in differs]
+                missing.append(f"{kind}: latest evidence is for another release ({', '.join(named)}); "
                                f"rerun it for {ident['version']}")
             else:
                 missing.append(f"{kind}: no evidence for {ident['version']} yet")
@@ -511,13 +519,17 @@ def pending_evidence(root: Path, pid: str, remote: str = "origin") -> list:
     this checkout lacks: an evidence PR not merged yet, or a branch pushed without one. Compared
     by file, so a squash-merged branch counts as merged."""
     branch = re.compile(rf"refs/heads/(inventory/{re.escape(pid)}-\d{{8}}T\d{{6}}Z)")
+    # CI's checkout is shallow, so its fetch stays shallow; a depth would make a full clone shallow.
+    depth = ["--depth=1"] if _git(root, "rev-parse", "--is-shallow-repository").strip() == "true" else []
     pending = []
     for line in _git(root, "ls-remote", "--heads", remote).splitlines():
         found = branch.fullmatch(line.partition("\t")[2])
         if not found:
             continue
-        _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", remote, found.group(0))
-        if _git(root, "diff", "--name-only", "--diff-filter=AM", "HEAD", "FETCH_HEAD", "--", f"evidence/{pid}/").strip():
+        _git(root, "fetch", "--quiet", "--no-tags", *depth, remote, found.group(0))
+        # Without --no-renames, a record the branch adds can pair with a later one on main and hide.
+        if _git(root, "diff", "--name-only", "--no-renames", "--diff-filter=AM", "HEAD", "FETCH_HEAD", "--",
+                f"evidence/{pid}/").strip():
             pending.append(found.group(1))
     return pending
 

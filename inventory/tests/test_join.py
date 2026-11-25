@@ -111,6 +111,31 @@ class Outstanding(unittest.TestCase):
         self.assertEqual((r["status"], r["missing"]), ("complete", []))
         self.assertEqual([h["reason"] for h in r["history"] if h["kind"] == "release"], [None, None])
 
+    def test_a_corrected_release_keeps_the_evidence_recorded_before_it(self):
+        records = complete_records(dict(identity(), git_sha=None))
+        self.assertEqual(row(records)["missing"], ["release: git_sha missing"])
+        corrected = dict(copy.deepcopy(records[0]), date="2026-11-21T09:00:00Z", identity=identity())
+        r = row(records + [corrected])
+        self.assertEqual((r["identity"], r["status"], r["missing"]), (identity(), "complete", []))
+        self.assertEqual(set(r["evidence"]), set(inventory.BUNDLE))
+
+    def test_a_conflicting_correction_does_not_carry_the_evidence(self):
+        records = complete_records(dict(identity(), git_sha=None))
+        clash = dict(copy.deepcopy(records[0]), date="2026-11-21T09:00:00Z",
+                     identity=dict(identity(), manifest_digest="sha256:" + "9" * 64))
+        r = row(records + [clash])
+        self.assertIn("release: version 0.1.0 recorded with conflicting identities; a published version is never replaced",
+                      r["missing"])
+        self.assertIn(f"resolution: latest evidence is for another release (manifest_digest sha256:{'1' * 64}); "
+                      "rerun it for 0.1.0", r["missing"])
+        self.assertEqual(r["evidence"], {})
+
+    def test_another_release_names_the_field_its_evidence_left_unstated(self):
+        records = complete_records(identity())
+        next(rec for rec in records if rec["kind"] == "docs")["identity"] = dict(identity(), git_sha=None)
+        self.assertEqual(row(records)["missing"],
+                         ["docs: latest evidence is for another release (git_sha unstated); rerun it for 0.1.0"])
+
     def test_an_old_version_conflict_does_not_block_the_current_release(self):
         records = complete_records(identity())
         old = copy.deepcopy(records[0])
