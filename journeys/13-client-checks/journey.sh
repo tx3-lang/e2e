@@ -229,22 +229,25 @@ json.dump({**row, "language": "swift", "tii_digest": "sha256:other"}, open("row-
 json.dump({**row, "language": "swift", "release_date": ""}, open("row-swift-undated.json", "w"))
 json.dump({**row, "language": "swift", "run_url": "https://ci.example/runs/1/attempts/1"}, open("row-swift-earlier.json", "w"))
 PY
-combine() { local out="$1"; shift; python3 "${HELPER}" combine "${IDENTITY[@]}" --date now --run-url local --out "${out}" "$@"; }
+pick() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' py-settle.json "$1"; }
+# Combine accepts only rows from the current run; check.sh took RUN_URL from the
+# environment (set in CI), so the derived rows carry that run's URL.
+RUN_URL_OF_ROWS="$(pick run_url)"
+combine() { local out="$1"; shift; python3 "${HELPER}" combine "${IDENTITY[@]}" --date now --run-url "${RUN_URL_OF_ROWS}" --out "${out}" "$@"; }
 FIVE=(rust=row-rust.json python=row-python.json go=row-go.json typescript=row-typescript.json java=row-java.json)
 run_cmd "combine — six passing languages" combine all.json "${FIVE[@]}" swift=row-swift.json
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["result"]=="pass" and r["passed"]==6 and r["release_date"], r' all.json \
   || die "six passing rows did not combine to a pass"
 ok "six passing rows combine to an overall pass"
-python3 "${HELPER}" combine --identity-from py-settle.json --date now --run-url local --out from.json \
+python3 "${HELPER}" combine --identity-from py-settle.json --date now --run-url "${RUN_URL_OF_ROWS}" --out from.json \
   "${FIVE[@]}" swift=row-swift.json >/dev/null || die "combine --identity-from did not pass six rows"
 run_cmd "summary — Markdown table of the combined result" python3 "${HELPER}" summary from.json
 assert_output_contains "| swift | pass |" "summary lists every language"
 # The workflow passes the release reference and the raw network input; an empty
 # network defaults to the profile, as in check.sh.
-pick() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' py-settle.json "$1"; }
 python3 "${HELPER}" combine --release e2e/client-check:0.1.0 --network "" --profile preprod --operation settle \
   --manifest-digest "$(pick manifest_digest)" --tii-digest "$(pick tii_digest)" --git-sha "$(pick git_sha)" \
-  --date now --run-url local --out workflow.json \
+  --date now --run-url "${RUN_URL_OF_ROWS}" --out workflow.json \
   rust=preprod-rust.json python=preprod-python.json go=preprod-go.json typescript=preprod-typescript.json \
   java=preprod-java.json swift=preprod-swift.json >/dev/null || die "combine with the workflow's identity and an empty network failed"
 ok "an empty network defaults to the profile"
