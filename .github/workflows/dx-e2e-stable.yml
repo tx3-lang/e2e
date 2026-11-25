@@ -92,9 +92,15 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+      - uses: ./.github/actions/setup-maven
       - name: Require Maven 3.9
         shell: bash
-        run: mvn -version | head -n1 | grep -Eq '^Apache Maven 3[.]9[.]'
+        run: |
+          found="$(mvn -B -version)"
+          found="${found%%$'\n'*}"
+          echo "Found: ${found}"
+          [[ "${found}" =~ ^Apache\ Maven\ 3\.9\. ]] \
+            || { echo "::error::Maven 3.9 is required, found: ${found}"; exit 1; }
       - uses: ./.github/actions/dx-e2e-run
         with:
           channel: stable

@@ -1,0 +1,22 @@
+name: 'Set up pinned Maven'
+description: "Install a checksum-verified Apache Maven release and put it first on PATH, so a job does not depend on the runner image's Maven."
+
+runs:
+  using: composite
+  steps:
+    - name: Install Maven
+      shell: bash
+      env:
+        # Bump both together; the digest is the release's published .sha512.
+        MAVEN_VERSION: '3.9.16'
+        MAVEN_SHA512: '831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6'
+      run: |
+        set -euo pipefail
+        archive="apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+        url="https://repo1.maven.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/${archive}"
+        dest="${RUNNER_TEMP}/maven"
+        mkdir -p "${dest}"
+        curl -fsSL --retry 3 -o "${dest}/${archive}" "${url}"
+        echo "${MAVEN_SHA512}  ${dest}/${archive}" | sha512sum -c -
+        tar -xzf "${dest}/${archive}" -C "${dest}"
+        echo "${dest}/apache-maven-${MAVEN_VERSION}/bin" >> "${GITHUB_PATH}"
