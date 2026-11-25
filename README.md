@@ -116,6 +116,9 @@ would misrepresent (and drop macOS). Triggers: pushes to `main` touching `run.sh
 
 Journeys that need secrets (live network) would run in a separate, secrets-gated job.
 
+`.github/workflows/client-checks.yml` checks the six typed clients against one published
+interface release and is reusable from other workflows; see `journeys/13-client-checks/README.md`.
+
 ## Adding a journey
 
 See the **`add-e2e-journey` skill** (`skills/add-e2e-journey/SKILL.md`) — the canonical guide for

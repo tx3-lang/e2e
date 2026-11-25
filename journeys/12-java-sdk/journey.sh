@@ -25,8 +25,10 @@ fi
 
 java -version 2>&1 | head -n1 | grep -Eq 'version "21([.]|\")' \
   || die "Java 21 is required for the Java SDK journey"
-mvn -version | head -n1 | grep -Eq '^Apache Maven 3[.]9[.]' \
-  || die "Maven 3.9 is required for the Java SDK journey"
+MAVEN_FOUND="$(mvn -B -version)" || die "mvn -version failed"
+MAVEN_FOUND="${MAVEN_FOUND%%$'\n'*}"
+[[ "${MAVEN_FOUND}" =~ ^Apache\ Maven\ 3\.9\. ]] \
+  || die "Maven 3.9 is required for the Java SDK journey, found: ${MAVEN_FOUND}"
 
 # 1. Scaffold under a stable name so the generated package and artifact are
 # deterministic (`land.tx3.generated.demo.DemoClient`, `demo-client`).

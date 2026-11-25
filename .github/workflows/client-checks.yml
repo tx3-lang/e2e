@@ -1,0 +1,292 @@
+name: Client checks
+
+# Six typed clients against one published interface release, one record per
+# language plus a combined result keyed by the release identity. Called with a
+# release (workflow_dispatch, or workflow_call from the public inventory) it
+# checks that release; on pull requests and pushes it checks the controlled
+# fixture release and runs the harness tests in journey 13. A fixture pass
+# proves the harness only. Artifact names carry a key derived from the call's
+# inputs, so one caller run can check several releases. See
+# journeys/13-client-checks/README.md.
+
+on:
+  pull_request:
+    paths:
+      - 'journeys/13-client-checks/**'
+      - 'lib/**'
+      - '.github/workflows/client-checks.yml'
+      - '.github/actions/dx-e2e-run/**'
+  push:
+    branches: [main]
+    paths:
+      - 'journeys/13-client-checks/**'
+      - 'lib/**'
+      - '.github/workflows/client-checks.yml'
+      - '.github/actions/dx-e2e-run/**'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Interface release, <scope>/<name>:<version>. Empty checks the fixture release.'
+        type: string
+        default: ''
+      manifest_digest:
+        description: 'Expected OCI manifest digest (sha256:...).'
+        type: string
+        default: ''
+      tii_digest:
+        description: 'Expected TII digest (sha256:...).'
+        type: string
+        default: ''
+      git_sha:
+        description: 'Expected source commit recorded by the release.'
+        type: string
+        default: ''
+      network:
+        description: 'Network the release targets.'
+        type: string
+        default: ''
+      profile:
+        description: 'Interface profile the clients are built for.'
+        type: string
+        default: ''
+      operation:
+        description: 'Transaction the clients call.'
+        type: string
+        default: ''
+      args:
+        description: 'Input fixture as JSON: parameter and party names to values.'
+        type: string
+        default: ''
+      channel:
+        description: 'Released toolchain channel that supplies trix and tx3c.'
+        type: string
+        default: stable
+  workflow_call:
+    inputs:
+      release:
+        description: 'Interface release, <scope>/<name>:<version>. Empty checks the fixture release.'
+        type: string
+        default: ''
+      manifest_digest:
+        description: 'Expected OCI manifest digest (sha256:...).'
+        type: string
+        default: ''
+      tii_digest:
+        description: 'Expected TII digest (sha256:...).'
+        type: string
+        default: ''
+      git_sha:
+        description: 'Expected source commit recorded by the release.'
+        type: string
+        default: ''
+      network:
+        description: 'Network the release targets.'
+        type: string
+        default: ''
+      profile:
+        description: 'Interface profile the clients are built for.'
+        type: string
+        default: ''
+      operation:
+        description: 'Transaction the clients call.'
+        type: string
+        default: ''
+      args:
+        description: 'Input fixture as JSON: parameter and party names to values.'
+        type: string
+        default: ''
+      channel:
+        description: 'Released toolchain channel that supplies trix and tx3c.'
+        type: string
+        default: stable
+      harness_ref:
+        description: 'tx3-lang/e2e revision supplying the harness, for callers in other repositories.'
+        type: string
+        default: ''
+    outputs:
+      result:
+        description: 'Combined release-scoped result (JSON).'
+        value: ${{ jobs.combine.outputs.result }}
+
+permissions:
+  contents: read
+
+env:
+  RELEASE: ${{ inputs.release }}
+  MANIFEST_DIGEST: ${{ inputs.manifest_digest }}
+  TII_DIGEST: ${{ inputs.tii_digest }}
+  GIT_SHA: ${{ inputs.git_sha }}
+  NETWORK: ${{ inputs.network }}
+  PROFILE: ${{ inputs.profile }}
+  OPERATION: ${{ inputs.operation }}
+  ARGS_JSON: ${{ inputs.args }}
+  CHANNEL: ${{ inputs.channel || 'stable' }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+
+jobs:
+  harness:
+    name: harness tests (journey 13)
+    if: ${{ !inputs.release }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/dx-e2e-run
+        with:
+          channel: stable
+          journey: 13-client-checks
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  client:
+    name: client (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { language: rust, os: ubuntu-24.04 }
+          - { language: python, os: ubuntu-24.04 }
+          - { language: go, os: ubuntu-24.04 }
+          - { language: typescript, os: ubuntu-24.04 }
+          - { language: java, os: ubuntu-24.04 }
+          - { language: swift, os: macos-15 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.harness_ref && 'tx3-lang/e2e' || github.repository }}
+          ref: ${{ inputs.harness_ref }}
+          persist-credentials: false
+      - name: Derive the call key
+        shell: bash
+        run: |
+          key="$(python3 journeys/13-client-checks/client_check.py call-key \
+            "${RELEASE}" "${OPERATION}" "${NETWORK}" "${PROFILE}" "${ARGS_JSON}" "${CHANNEL}")"
+          echo "CALL_KEY=${key}" >> "${GITHUB_ENV}"
+      - if: matrix.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+      - if: matrix.language == 'typescript'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - if: matrix.language == 'swift'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+      - name: Install the released toolchain
+        uses: ./.github/actions/dx-e2e-run
+        with:
+          channel: ${{ inputs.channel || 'stable' }}
+          warmup-only: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A release run executes code the release supplies, so it never writes the shared cache.
+          save-cache: ${{ inputs.release && 'false' || 'true' }}
+      - name: Check the ${{ matrix.language }} client
+        shell: bash
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          bin="${HOME}/.tx3/${CHANNEL}/bin"
+          export TRIX="${bin}/trix" TX3_TX3C_PATH="${bin}/tx3c"
+          mkdir -p "${RUNNER_TEMP}/record"
+          common=(--lang "${LANGUAGE}" --run-url "${RUN_URL}" --workdir "${RUNNER_TEMP}/work"
+                  --out "${RUNNER_TEMP}/record/${LANGUAGE}.json")
+          if [[ -z "${RELEASE}" ]]; then
+            rc=0
+            bash journeys/13-client-checks/fixture.sh --operation settle "${common[@]}" || rc=$?
+            # Harness check only, not a record: an interface with no integer parameter.
+            bash journeys/13-client-checks/fixture.sh --fixture fixture-noint --operation transfer \
+              --lang "${LANGUAGE}" --workdir "${RUNNER_TEMP}/work-noint" \
+              --out "${RUNNER_TEMP}/noint/${LANGUAGE}.json" || rc=$?
+            exit "${rc}"
+          fi
+          printf '%s' "${ARGS_JSON}" > "${RUNNER_TEMP}/args.json"
+          exec bash journeys/13-client-checks/check.sh "${common[@]}" --ref "${RELEASE}" \
+            --manifest-digest "${MANIFEST_DIGEST}" --tii-digest "${TII_DIGEST}" --git-sha "${GIT_SHA}" \
+            --network "${NETWORK}" --profile "${PROFILE}" --operation "${OPERATION}" \
+            --args "${RUNNER_TEMP}/args.json"
+      - name: Upload the language record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-check-record-${{ env.CALL_KEY }}-${{ matrix.language }}
+          path: ${{ runner.temp }}/record
+          if-no-files-found: ignore
+      - name: Upload the consumer workdir on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-check-work-${{ env.CALL_KEY }}-${{ matrix.language }}
+          path: |
+            ${{ runner.temp }}/work
+            ${{ runner.temp }}/work-noint
+            !${{ runner.temp }}/work*/**/node_modules
+            !${{ runner.temp }}/work*/**/target
+            !${{ runner.temp }}/work*/**/.build
+            !${{ runner.temp }}/work*/**/.venv
+            !${{ runner.temp }}/work*/m2
+          if-no-files-found: ignore
+          retention-days: 7
+
+  combine:
+    name: combined result
+    needs: client
+    if: always()
+    runs-on: ubuntu-24.04
+    outputs:
+      result: ${{ steps.combine.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.harness_ref && 'tx3-lang/e2e' || github.repository }}
+          ref: ${{ inputs.harness_ref }}
+          persist-credentials: false
+      - name: Derive the call key
+        shell: bash
+        run: |
+          key="$(python3 journeys/13-client-checks/client_check.py call-key \
+            "${RELEASE}" "${OPERATION}" "${NETWORK}" "${PROFILE}" "${ARGS_JSON}" "${CHANNEL}")"
+          echo "CALL_KEY=${key}" >> "${GITHUB_ENV}"
+      # One directory per language artifact; combine reads only <language>.json from each.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: client-check-record-${{ env.CALL_KEY }}-*
+          path: records
+      - name: Combine the language records
+        id: combine
+        shell: bash
+        run: |
+          shopt -s nullglob
+          root="records/client-check-record-${CALL_KEY}-"
+          identity=(--release "${RELEASE}" --network "${NETWORK}" --profile "${PROFILE}" --operation "${OPERATION}"
+                    --manifest-digest "${MANIFEST_DIGEST}" --tii-digest "${TII_DIGEST}" --git-sha "${GIT_SHA}")
+          if [[ -z "${RELEASE}" ]]; then
+            records=("${root}"*/*.json)
+            identity=(--identity-from "${records[0]:-records/none.json}")
+          fi
+          rc=0
+          python3 journeys/13-client-checks/client_check.py combine "${identity[@]}" \
+            --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --run-url "${RUN_URL}" --out result.json \
+            --artifact-root "${root}" || rc=$?
+          echo "result=$(python3 -c 'import json; print(json.dumps(json.load(open("result.json"))))')" >> "${GITHUB_OUTPUT}"
+          python3 journeys/13-client-checks/client_check.py summary result.json >> "${GITHUB_STEP_SUMMARY}"
+          exit "${rc}"
+      - name: Upload the combined result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-check-result-${{ env.CALL_KEY }}
+          path: |
+            result.json
+            records
+          if-no-files-found: error

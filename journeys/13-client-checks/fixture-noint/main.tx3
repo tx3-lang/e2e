@@ -1,0 +1,26 @@
+// An interface with no integer parameter, so clients that add an integer
+// dependency only on demand (Swift's BigInt) are built without it.
+party Sender;
+
+party Receiver;
+
+tx transfer(
+    refund: Address,
+    anchor: UtxoRef,
+    urgent: Bool,
+) {
+    input source {
+        from: Sender,
+        min_amount: Ada(2000000) + fees,
+    }
+
+    output {
+        to: Receiver,
+        amount: Ada(2000000),
+    }
+
+    output {
+        to: Sender,
+        amount: source - Ada(2000000) - fees,
+    }
+}

@@ -15,8 +15,10 @@ disposable local devnet.
   Java plugin registration that invokes `--template java-client`. The Java CI
   jobs require both floors, so a below-floor skip cannot count as coverage.
 - **Host baseline:** CI runs only on `ubuntu-24.04` with Temurin 21 and Maven
-  3.9. A local run without Java/Maven skips; CI treats either missing tool as a
-  failure so absent prerequisites cannot count as coverage.
+  3.9. The image's own Maven follows the latest 3.x, so the jobs install a
+  checksum-pinned 3.9 through `.github/actions/setup-maven`. A local run without
+  Java/Maven skips; CI treats either missing tool as a failure so absent
+  prerequisites cannot count as coverage.
 - **Identity:** the checked-in phrase and address are the Java SDK's public,
   checksum-verified CIP-1852 test vector. The address is funded only by this
   disposable devnet; the phrase is never a live credential. The receiver is
